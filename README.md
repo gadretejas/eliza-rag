@@ -1,53 +1,93 @@
 # SEC EDGAR RAG System
 
-A retrieval-augmented generation system for answering business questions over SEC 10-K and 10-Q filings. Given a natural-language question, it retrieves relevant passages from a corpus of 246 filings across 54 major US companies and answers in a single LLM call.
+A retrieval-augmented generation system for answering business questions over SEC 10-K and 10-Q filings. Given a natural-language question, it retrieves the most relevant passages from a corpus of 246 filings across 54 major US companies and produces a grounded, cited answer in a single LLM call.
 
-## What it does
-
-- Indexes annual (10-K) and quarterly (10-Q) reports from companies like AAPL, NVDA, MSFT, JPM, TSLA, and 49 others
-- Retrieves filing sections that are semantically relevant to the question and match metadata filters (company, filing type, date range, section type)
-- Produces a grounded, cited answer in one Claude API call
-
-Example questions it handles:
-- "What are the primary risk factors facing Apple, Tesla, and JPMorgan, and how do they compare?"
+Example questions:
+- "What are the primary risk factors facing Apple, Tesla, and JPMorgan?"
 - "How has NVIDIA's revenue and growth outlook changed over the last two years?"
 - "What regulatory risks do the major pharmaceutical companies face?"
+
+---
 
 ## Project structure
 
 ```
 .
-├── README.md
-├── chunk.py              # Chunking pipeline: corpus → chunks.jsonl
-├── chunks.jsonl          # Output: 50,676 chunks with metadata (generated)
+├── chunk.py              # Stage 1 — structural chunker: corpus → chunks.jsonl
+├── embed.py              # Stage 2 — index builder: chunks.jsonl → index.faiss
+├── retrieve.py           # Stage 3 — hybrid retriever: question → ranked chunks
+├── answer.py             # Stage 4 — answer generator: question → cited answer
+├── requirements.txt
+├── prompts/
+│   └── system_prompt.md  # LLM system prompt (loaded at runtime by answer.py)
 ├── edgar_corpus/         # 246 SEC filings (.txt) + manifest.json
 └── docs/
-    ├── chunking_strategy.md      # Design rationale and tradeoff analysis
-    └── chunking_implementation.md # Full implementation reference
+    ├── chunking_strategy.md       # Chunking design rationale
+    ├── chunking_implementation.md # chunk.py full technical reference
+    ├── embed.md                   # embed.py reference
+    ├── retrieve.md                # retrieve.py reference
+    ├── retrieval_design.md        # Retrieval system design doc
+    ├── answer_generation.md       # Answer generation design doc
+    ├── system_prompt.md           # System prompt design and iteration log
+    ├── embedding_models.md        # Embedding model cost analysis and decision
+    └── testing_setup.md           # Step-by-step environment setup guide
 ```
 
-## Setup
+Generated files (gitignored — rebuild from scripts):
 
-Python 3.11+ required. No external dependencies for the chunking step.
+```
+chunks.jsonl    # 50,676 chunks with metadata
+index.faiss     # FAISS vector index (78 MB local / 311 MB OpenAI)
+```
+
+---
+
+## Quick start
+
+### 1. Install dependencies
 
 ```bash
-# Clone / unzip the repo, then:
-python3 chunk.py          # produces chunks.jsonl (~50k chunks, takes ~30s)
+pip3 install -r requirements.txt
 ```
 
-The embedding and retrieval step requires an embedding model and a vector store. See the retrieval section below.
-
-## Chunking
+### 2. Chunk the corpus
 
 ```bash
 python3 chunk.py
+# → chunks.jsonl  (50,676 chunks, ~30s)
 ```
 
-Reads every `*_full.txt` file in `edgar_corpus/`, processes it through a structural chunking pipeline, and writes `chunks.jsonl`. Each line is a JSON object:
+### 3. Build the vector index
+
+```bash
+# Free — local all-MiniLM-L6-v2 model, no API key needed (~4 min on CPU)
+python3 embed.py --model local
+
+# Higher quality — OpenAI text-embedding-3-small (~$0.40, ~4 min)
+export OPENAI_API_KEY=sk-...
+python3 embed.py
+```
+
+### 4. Ask a question
+
+```bash
+# Dev — Ollama (free, requires ollama serve + ollama pull llama3.2)
+python3 answer.py "What are NVDA's primary risk factors?" --model ollama:llama3.2
+
+# Prod — OpenAI (requires OPENAI_API_KEY)
+python3 answer.py "What are NVDA's primary risk factors?"
+```
+
+---
+
+## Pipeline
+
+### Stage 1 — Chunking (`chunk.py`)
+
+Reads every `*_full.txt` file in `edgar_corpus/` and splits it into structured chunks by SEC Item header. Handles three PDF-to-text format variants across the corpus (AAPL, BLK, AMZN styles). Produces `chunks.jsonl` where each line is:
 
 ```json
 {
-  "text": "The Company's business faces risks including...",
   "ticker": "AAPL",
   "company": "Apple Inc",
   "filing_type": "10-K (Annual Report)",
@@ -59,53 +99,96 @@ Reads every `*_full.txt` file in `edgar_corpus/`, processes it through a structu
   "section_name": "Risk Factors",
   "content_type": "text",
   "chunk_index": 3,
-  "source_file": "AAPL_10K_2024Q3_2024-11-01_full.txt"
+  "source_file": "AAPL_10K_2024Q3_2024-11-01_full.txt",
+  "text": "The Company's business faces risks including..."
 }
 ```
 
-See [docs/chunking_implementation.md](docs/chunking_implementation.md) for full details on the pipeline.
+**Output:** 50,676 chunks · median 1,859 chars · 248 table chunks  
+**Docs:** [docs/chunking_strategy.md](docs/chunking_strategy.md) · [docs/chunking_implementation.md](docs/chunking_implementation.md)
 
-## Embedding and indexing
+---
+
+### Stage 2 — Embedding (`embed.py`)
+
+Embeds every chunk's `text` field and writes a FAISS `IndexFlatIP` to `index.faiss`. L2-normalised vectors make inner product equivalent to cosine similarity.
 
 ```bash
-# Embed chunks.jsonl and load into a vector store
-python3 embed.py          # generates embeddings, writes to vector index
+python3 embed.py [--model openai|local] [--batch-size 200]
 ```
 
-Recommended: use `text-embedding-3-small` (OpenAI) or `voyage-finance-2` (Voyage AI, finance-tuned) with a local FAISS or ChromaDB index, or a hosted service like Pinecone.
+| Backend | Model | Dim | Index size | Cost |
+|---|---|---|---|---|
+| `openai` (default) | text-embedding-3-small | 1536 | 311 MB | ~$0.40 |
+| `local` | all-MiniLM-L6-v2 | 384 | 78 MB | free |
 
-## Retrieval
+The embedding model used at index time is auto-detected at query time from the index dimension.  
+**Docs:** [docs/embed.md](docs/embed.md) · [docs/embedding_models.md](docs/embedding_models.md)
 
-At query time:
+---
 
-1. Parse the question to infer metadata filters (tickers mentioned, date range, question type → section)
-2. Embed the question
-3. Run filtered vector search: `section_id IN [relevant items] AND ticker IN [mentioned companies]`
-4. Rank and select the top-k chunks by similarity score
+### Stage 3 — Retrieval (`retrieve.py`)
 
-## Answering (single LLM call)
-
-Retrieved chunks are assembled into a context block and injected into a prompt template:
+Single-shot hybrid retrieval pipeline:
 
 ```
-You are a financial analyst assistant. Answer the question below using only
-the provided SEC filing excerpts. Cite the company, filing type, and date
-for each claim.
-
-QUESTION: {question}
-
-CONTEXT:
-[Chunk 1 — AAPL 10-K 2024-11-01, Item 1A: Risk Factors]
-{chunk_text}
-
-[Chunk 2 — NVDA 10-K 2025-02-26, Item 1A: Risk Factors]
-{chunk_text}
-...
-
-ANSWER:
+question → QueryRouter → metadata-filtered ANN search → cross-encoder re-rank
+         → per-company balancing → top-k chunks
 ```
 
-The answer is produced in a single call to the Claude API (claude-sonnet-4-6 or claude-opus-4-7).
+- **QueryRouter** — keyword-based extraction of tickers (54 companies), section filters (Item 1A/7/8), date range, and filing type. No LLM call.
+- **VectorIndex** — FAISS ANN search with 3-level metadata post-filter fallback (full → relax date → relax section).
+- **Reranker** — `cross-encoder/ms-marco-MiniLM-L-6-v2` (local) or Cohere Rerank v3 (API).
+- **Balancing** — guarantees minimum representation per company for multi-ticker questions.
+
+```bash
+python3 retrieve.py "What are Apple's biggest risk factors?" --trace
+python3 retrieve.py "Compare MSFT and GOOG cloud revenue" --top-k 20
+```
+
+**Docs:** [docs/retrieve.md](docs/retrieve.md) · [docs/retrieval_design.md](docs/retrieval_design.md)
+
+---
+
+### Stage 4 — Answer generation (`answer.py`)
+
+Formats retrieved chunks as a numbered context block, calls an LLM, and parses inline `[n]` citations back to source chunk metadata.
+
+```bash
+python3 answer.py "question" [--model MODEL] [--top-k N] [--trace]
+```
+
+**LLM backends** — plug-and-play via a single flag:
+
+| `--model` value | Routes to | Requires |
+|---|---|---|
+| `gpt-5.4-mini` (default) | OpenAI API | `OPENAI_API_KEY` |
+| `gpt-5.4` | OpenAI API | `OPENAI_API_KEY` |
+| `ollama:llama3.2` | Ollama local | `ollama serve` |
+| `ollama:llama3.1:8b` | Ollama local | `ollama serve` |
+
+All backends use the OpenAI-compatible API — no branching logic, no extra dependencies.
+
+The system prompt is loaded from `prompts/system_prompt.md` at runtime. Edit the prompt without touching Python.
+
+**Example output:**
+```
+── Answer  [gpt-5.4-mini] ────────────────────────────────────────────────
+NVIDIA faces several significant risks. Supply chain concentration is a
+key concern — the company relies on TSMC for substantially all of its
+semiconductor fabrication [1]. Increasing export controls on AI chips
+to China create material revenue uncertainty [3].
+
+── Sources ───────────────────────────────────────────────────────────────
+  [1] NVDA · 10-K · 2024-02-21 · Item 1A
+       edgar_corpus/NVDA_10K_2024Q1_2024-02-21_full.txt
+  [3] NVDA · 10-K · 2024-02-21 · Item 1A
+       edgar_corpus/NVDA_10K_2024Q1_2024-02-21_full.txt
+```
+
+**Docs:** [docs/answer_generation.md](docs/answer_generation.md) · [docs/system_prompt.md](docs/system_prompt.md)
+
+---
 
 ## Corpus
 
@@ -116,23 +199,23 @@ The answer is produced in a single call to the Claude API (claude-sonnet-4-6 or 
 | Quarterly reports (10-Q) | 157 |
 | Companies | 54 |
 | Date range | 2022–2026 |
-| Sectors | Technology, Financial, Healthcare, Consumer, Energy, Industrial |
+| Total tokens | ~20M |
 
-Companies with full quarterly coverage (2023–2025): AAPL, AMZN, DIS, GOOG, JNJ, KO, MSFT, NVDA, PFE, TSLA, UNH, XOM, and others.
+Sectors: Technology · Financial Services · Healthcare · Consumer · Energy · Industrial
 
-## Design decisions
+Companies with multi-year quarterly coverage: AAPL, AMZN, DIS, GOOG, JNJ, KO, MSFT, NVDA, PFE, TSLA, UNH, XOM and others.
 
-Full design rationale is in [docs/chunking_strategy.md](docs/chunking_strategy.md).
+---
 
-The short version: structural section-based chunking (splitting on SEC Item headers) outperforms naive fixed-size chunking for this corpus because:
-- The legal structure of SEC filings maps directly onto question types (risk questions → Item 1A, revenue questions → Item 7)
-- Metadata filtering before vector search dramatically improves retrieval precision for cross-company comparison questions
-- Financial tables are kept intact to preserve row/column relationships
+## Environment variables
 
-## Evaluation
+| Variable | Required for |
+|---|---|
+| `OPENAI_API_KEY` | `embed.py --model openai`, `answer.py` with OpenAI models |
+| `COHERE_API_KEY` | `retrieve.py --reranker cohere` (optional) |
 
-Quality was assessed by:
-- Inspecting chunk size distribution (median 1,859 chars, P95 1,996 chars)
-- Checking section coverage across filing formats (AAPL, AMZN, BLK styles all produce correct section splits)
-- Verifying that table chunks preserve pipe-delimited structure
-- Manually spot-checking retrieved chunks for representative demo questions
+---
+
+## Full setup guide
+
+See [docs/testing_setup.md](docs/testing_setup.md) for step-by-step instructions including dependency install, Ollama setup (native Mac and Docker), and smoke-test commands for every stage.
