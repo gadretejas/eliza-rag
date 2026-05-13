@@ -27,7 +27,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -435,8 +435,8 @@ def main() -> None:
         help=f"Parallel workers (default: {DEFAULT_WORKERS})",
     )
     parser.add_argument(
-        "--resume", action="store_true",
-        help="Skip documents already present in contexts_cache.json",
+        "--fresh", action="store_true",
+        help="Ignore existing contexts_cache.json and regenerate everything",
     )
     parser.add_argument(
         "--chunks", type=Path, default=CHUNKS_PATH,
@@ -457,7 +457,6 @@ def main() -> None:
 
     print(f"Model   : {args.model}")
     print(f"Workers : {args.workers}")
-    print(f"Resume  : {args.resume}")
     print(f"Output  : {args.output}")
     print()
 
@@ -467,10 +466,9 @@ def main() -> None:
     docs   = group_chunks(chunks)
     print(f"  {len(chunks):,} chunks across {len(docs)} documents")
 
-    cache = load_cache(args.cache) if args.resume else {}
-    if args.resume and cache:
-        cached_docs = len(cache)
-        print(f"  Resuming — {cached_docs} documents already cached")
+    cache = {} if args.fresh else load_cache(args.cache)
+    if cache:
+        print(f"  Resuming — {len(cache)} documents already cached (use --fresh to restart)")
     print()
 
     # ── Generate contexts ─────────────────────────────────────────────────────
@@ -512,7 +510,7 @@ def main() -> None:
         "total_chunks":        str(total_written),
         "total_documents":     str(len(docs)),
         "model":               llm.model,
-        "generated_at":        datetime.utcnow().isoformat() + "Z",
+        "generated_at":        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "avg_original_tokens": str(avg_orig),
         "avg_enriched_tokens": str(avg_enriched),
     }
