@@ -116,9 +116,9 @@ def show_sections(conn: sqlite3.Connection, ticker: str) -> None:
 
     print_separator(f"{ticker} — sections")
     print(f"  {'Section ID':<14}  {'Date':<12}  {'Chunks':>6}  Section Name")
-    print(f"  {'─'*14}  {'─'*12}  {'─'*6}  {'─'*30}")
+    print(f"  {'─'*14}  {'─'*12}  {'─'*6}  {'─'*40}")
     for r in rows:
-        name = (r["section_name"] or "")[:30]
+        name = r["section_name"] or ""
         print(f"  {r['section_id']:<14}  {r['filing_date']:<12}  {r['n']:>6}  {name}")
     print()
 
