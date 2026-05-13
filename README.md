@@ -13,32 +13,44 @@ Example questions:
 
 ```
 .
-├── chunk.py              # Stage 1 — structural chunker: corpus → chunks.jsonl
-├── embed.py              # Stage 2 — index builder: chunks.jsonl → index.faiss
-├── retrieve.py           # Stage 3 — hybrid retriever: question → ranked chunks
-├── answer.py             # Stage 4 — answer generator: question → cited answer
+├── chunk.py                        # Stage 1 — structural chunker: corpus → chunks.jsonl
+├── contextualize.py                # Stage 2 — parallel contextualizer: chunks → enriched DB
+├── contextualization_tester.py     # Test contextualizer on 2 documents → test output DB
+├── embed.py                        # Stage 3 — index builder: chunks.jsonl → index.faiss
+├── retrieve.py                     # Stage 4 — hybrid retriever: question → ranked chunks
+├── answer.py                       # Stage 5 — answer generator: question → cited answer
+├── query_db.py                     # Inspect contextualized_chunks.db (summary, search, browse)
 ├── requirements.txt
+├── .env.example                    # API key template — copy to .env and fill in
 ├── prompts/
-│   └── system_prompt.md  # LLM system prompt (loaded at runtime by answer.py)
-├── edgar_corpus/         # 246 SEC filings (.txt) + manifest.json
+│   └── system_prompt.md            # LLM system prompt (loaded at runtime by answer.py)
+├── edgar_corpus/                   # 246 SEC filings (.txt) + manifest.json
 └── docs/
-    ├── chunking_strategy.md       # Chunking design rationale
-    ├── chunking_implementation.md # chunk.py full technical reference
-    ├── embed.md                   # embed.py reference
-    ├── retrieve.md                # retrieve.py reference
-    ├── retrieval_design.md        # Retrieval system design doc
-    ├── answer_generation.md       # Answer generation design doc
-    ├── system_prompt.md           # System prompt design and iteration log
-    ├── embedding_models.md        # Embedding model cost analysis and decision
-    └── testing_setup.md           # Step-by-step environment setup guide
+    ├── chunking_strategy.md        # Chunking design rationale
+    ├── chunking_implementation.md  # chunk.py full technical reference
+    ├── contextualization.md        # Contextualization design and cost analysis
+    ├── sqlite_storage.md           # SQLite schema, ID scheme, query examples
+    ├── cost_metrics.md             # Measured costs for each pipeline stage
+    ├── embed.md                    # embed.py reference
+    ├── retrieve.md                 # retrieve.py reference
+    ├── retrieval_design.md         # Retrieval system design doc
+    ├── answer_generation.md        # Answer generation design doc
+    ├── system_prompt.md            # System prompt design and iteration log
+    ├── embedding_models.md         # Embedding model cost analysis and decision
+    ├── chromadb_migration.md       # Phase-by-phase ChromaDB migration plan
+    └── testing_setup.md            # Step-by-step environment setup guide
 ```
 
-Generated files (gitignored — rebuild from scripts):
+Generated files tracked in git (except the full corpus DB):
 
 ```
-chunks.jsonl    # 50,676 chunks with metadata
-index.faiss     # FAISS vector index (78 MB local / 311 MB OpenAI)
+chunks.jsonl                       # 50,676 chunks with metadata
+index.faiss                        # FAISS vector index (78 MB local / 311 MB OpenAI)
+contexts_cache.json                # LLM output cache — resumable if contextualize.py is interrupted
+contextualization_test_output.db   # SQLite DB from the 2-document tester run
 ```
+
+`contextualized_chunks.db` (full corpus, estimated ~280 MB) is gitignored until after the full run.
 
 ---
 
@@ -48,6 +60,7 @@ index.faiss     # FAISS vector index (78 MB local / 311 MB OpenAI)
 
 ```bash
 pip3 install -r requirements.txt
+cp .env.example .env   # then fill in your API keys
 ```
 
 ### 2. Chunk the corpus
@@ -57,18 +70,33 @@ python3 chunk.py
 # → chunks.jsonl  (50,676 chunks, ~30s)
 ```
 
-### 3. Build the vector index
+### 3. Contextualize
+
+```bash
+# Test on 2 documents first (~$0.04, ~2 min)
+python3 contextualization_tester.py
+# → contextualization_test_output.db
+
+# Inspect the test output
+python3 query_db.py --db contextualization_test_output.db --summary
+python3 query_db.py --db contextualization_test_output.db --ticker AAPL --section "Item 1A"
+
+# Full corpus (~$2.43, parallelised with resume support)
+python3 contextualize.py
+# → contextualized_chunks.db
+```
+
+### 4. Build the vector index
 
 ```bash
 # Free — local all-MiniLM-L6-v2 model, no API key needed (~4 min on CPU)
 python3 embed.py --model local
 
 # Higher quality — OpenAI text-embedding-3-small (~$0.40, ~4 min)
-export OPENAI_API_KEY=sk-...
 python3 embed.py
 ```
 
-### 4. Ask a question
+### 5. Ask a question
 
 ```bash
 # Dev — Ollama (free, requires ollama serve + ollama pull llama3.2)
@@ -109,7 +137,32 @@ Reads every `*_full.txt` file in `edgar_corpus/` and splits it into structured c
 
 ---
 
-### Stage 2 — Embedding (`embed.py`)
+### Stage 2 — Contextualization (`contextualize.py`)
+
+Enriches every chunk with two LLM-generated summaries before embedding: a document-level context (company, filing type, headline facts) and a section-level context (dominant themes, key entities). These are prepended to the chunk text at query time, giving the embedding model and the LLM richer signal.
+
+```bash
+python3 contextualize.py [--workers 8] [--model gpt-5.4-mini]
+# → contexts_cache.json        (LLM outputs, resumable)
+# → contextualized_chunks.db   (SQLite, ~280 MB at full corpus)
+```
+
+Each enriched chunk stored in the DB:
+
+```
+[DOCUMENT] Apple Inc. filed its 10-K annual report for fiscal year 2024...
+[SECTION]  Item 1A covers hardware supply concentration, export controls...
+<original chunk text>
+```
+
+**Cost:** ~$2.43 for the full corpus (measured at $0.04/49 calls on 2 documents)  
+**Resume:** interrupted runs continue from `contexts_cache.json` — no API calls are repeated  
+**Inspect:** `python3 query_db.py --summary` · `--ticker AAPL` · `--search "supply chain"`  
+**Docs:** [docs/contextualization.md](docs/contextualization.md) · [docs/sqlite_storage.md](docs/sqlite_storage.md) · [docs/cost_metrics.md](docs/cost_metrics.md)
+
+---
+
+### Stage 3 — Embedding (`embed.py`)
 
 Embeds every chunk's `text` field and writes a FAISS `IndexFlatIP` to `index.faiss`. L2-normalised vectors make inner product equivalent to cosine similarity.
 
@@ -127,7 +180,7 @@ The embedding model used at index time is auto-detected at query time from the i
 
 ---
 
-### Stage 3 — Retrieval (`retrieve.py`)
+### Stage 4 — Retrieval (`retrieve.py`)
 
 Single-shot hybrid retrieval pipeline:
 
@@ -150,7 +203,7 @@ python3 retrieve.py "Compare MSFT and GOOG cloud revenue" --top-k 20
 
 ---
 
-### Stage 4 — Answer generation (`answer.py`)
+### Stage 5 — Answer generation (`answer.py`)
 
 Formats retrieved chunks as a numbered context block, calls an LLM, and parses inline `[n]` citations back to source chunk metadata.
 
@@ -211,8 +264,11 @@ Companies with multi-year quarterly coverage: AAPL, AMZN, DIS, GOOG, JNJ, KO, MS
 
 | Variable | Required for |
 |---|---|
-| `OPENAI_API_KEY` | `embed.py --model openai`, `answer.py` with OpenAI models |
+| `OPENAI_API_KEY` | `contextualize.py`, `embed.py --model openai`, `answer.py` with OpenAI models |
 | `COHERE_API_KEY` | `retrieve.py --reranker cohere` (optional) |
+| `VOYAGE_API_KEY` | `embed.py --model voyage` (optional, recommended for production) |
+
+Copy `.env.example` to `.env` and fill in the keys you need. Never commit `.env`.
 
 ---
 
