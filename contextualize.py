@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -39,12 +40,41 @@ load_dotenv()
 CHUNKS_PATH   = Path("chunks.jsonl")
 CACHE_PATH    = Path("contexts_cache.json")
 OUTPUT_PATH   = Path("contextualized_chunks.db")
+LOG_PATH      = Path("contextualize.log")
 
 DEFAULT_MODEL   = "gpt-5.4-mini"
 DEFAULT_WORKERS = 8
 INPUT_CHARS     = 3000
+LOG_INTERVAL    = 50   # log a progress line every N completed tasks
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
+
+
+# ── Logging setup ──────────────────────────────────────────────────────────────
+
+def setup_logging(log_path: Path) -> logging.Logger:
+    logger = logging.getLogger("contextualize")
+    logger.setLevel(logging.DEBUG)
+
+    fmt_console = logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s",
+                                    datefmt="%H:%M:%S")
+    fmt_file    = logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s",
+                                    datefmt="%Y-%m-%d %H:%M:%S")
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.INFO)
+    console.setFormatter(fmt_console)
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(fmt_file)
+
+    logger.addHandler(console)
+    logger.addHandler(file_handler)
+    return logger
+
+
+log: logging.Logger = logging.getLogger("contextualize")
 
 
 # ── Prompts ────────────────────────────────────────────────────────────────────
@@ -128,10 +158,12 @@ class LLMClient:
                 return (resp.choices[0].message.content or "").strip()
             except Exception as e:
                 if attempt < retries:
-                    time.sleep(2 ** attempt)   # exponential backoff
+                    wait = 2 ** attempt
+                    log.warning("API error (attempt %d/%d), retrying in %ds: %s",
+                                attempt + 1, retries + 1, wait, e)
+                    time.sleep(wait)
                 else:
-                    print(f"\n  Warning: failed after {retries+1} attempts — {e}",
-                          file=sys.stderr)
+                    log.error("Failed after %d attempts: %s", retries + 1, e)
                     return ""
         return ""
 
@@ -269,17 +301,17 @@ def run_parallel(
     if not tasks:
         return cache
 
-    lock        = threading.Lock()
-    completed   = 0
-    total       = len(tasks)
-    start_time  = time.time()
+    lock       = threading.Lock()
+    completed  = 0
+    failures   = 0
+    total      = len(tasks)
+    start_time = time.time()
 
     def execute(task: ContextTask) -> tuple[ContextTask, str]:
         result = llm.complete(task.prompt)
         return task, result
 
-    print(f"Generating {total} contexts with {workers} parallel workers ...")
-    print(f"{'─' * 60}")
+    log.info("Generating %d contexts with %d parallel workers", total, workers)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(execute, task): task for task in tasks}
@@ -290,19 +322,21 @@ def run_parallel(
 
             with lock:
                 completed += 1
-                elapsed   = time.time() - start_time
-                rate      = completed / elapsed if elapsed > 0 else 0
-                remaining = (total - completed) / rate if rate > 0 else 0
-                label     = (f"{task.source_file[:30]} / {task.section_id}"
+                if not result:
+                    failures += 1
+                    label = (f"{task.source_file} / {task.section_id}"
                              if task.task_type == "section"
-                             else task.source_file[:40])
-                print(
-                    f"  [{completed:>4}/{total}]  {label:<45}  "
-                    f"ETA {remaining/60:.1f}m",
-                    end="\r",
-                )
+                             else task.source_file)
+                    log.warning("Empty result for %s", label)
 
-    print()  # newline after \r progress
+                if completed % LOG_INTERVAL == 0 or completed == total:
+                    elapsed   = time.time() - start_time
+                    rate      = completed / elapsed if elapsed > 0 else 0
+                    remaining = (total - completed) / rate if rate > 0 else 0
+                    log.info("[%d/%d]  %.0f/min  ETA %.1fm  failures=%d",
+                             completed, total, rate * 60, remaining / 60, failures)
+
+    log.info("Context generation complete — %d done, %d failures", total, failures)
     return cache
 
 
@@ -451,52 +485,57 @@ def main() -> None:
         "--output", type=Path, default=OUTPUT_PATH,
         help=f"Output file (default: {OUTPUT_PATH})",
     )
+    parser.add_argument(
+        "--log", type=Path, default=LOG_PATH,
+        help=f"Log file (default: {LOG_PATH})",
+    )
     args = parser.parse_args()
 
-    if not args.chunks.exists():
-        sys.exit(f"{args.chunks} not found — run chunk.py first.")
+    setup_logging(args.log)
 
-    print(f"Model   : {args.model}")
-    print(f"Workers : {args.workers}")
-    print(f"Output  : {args.output}")
-    print()
+    if not args.chunks.exists():
+        log.error("%s not found — run chunk.py first.", args.chunks)
+        sys.exit(1)
+
+    log.info("Model   : %s", args.model)
+    log.info("Workers : %d", args.workers)
+    log.info("Output  : %s", args.output)
+    log.info("Log     : %s", args.log)
 
     # ── Load ──────────────────────────────────────────────────────────────────
-    print(f"Loading chunks from {args.chunks} ...")
+    log.info("Loading chunks from %s ...", args.chunks)
     chunks = load_chunks(args.chunks)
     docs   = group_chunks(chunks)
-    print(f"  {len(chunks):,} chunks across {len(docs)} documents")
+    log.info("%d chunks across %d documents", len(chunks), len(docs))
 
     cache = {} if args.fresh else load_cache(args.cache)
     if cache:
-        print(f"  Resuming — {len(cache)} documents already cached (use --fresh to restart)")
-    print()
+        log.info("Resuming — %d documents already cached (use --fresh to restart)",
+                 len(cache))
 
     # ── Generate contexts ─────────────────────────────────────────────────────
     llm   = LLMClient(args.model)
     tasks = build_tasks(docs, cache)
 
     if not tasks:
-        print("All contexts already cached — skipping generation.")
+        log.info("All contexts already cached — skipping generation.")
     else:
         t0    = time.time()
         cache = run_parallel(tasks, llm, args.workers, cache, args.cache)
         elapsed = time.time() - t0
-        print(f"\n  {len(tasks)} contexts generated in {elapsed:.0f}s  "
-              f"({elapsed/60:.1f} min)")
-        print(f"  Cache saved → {args.cache}")
-    print()
+        log.info("%d contexts generated in %.0fs (%.1f min)", len(tasks), elapsed, elapsed / 60)
+        log.info("Cache saved → %s", args.cache)
 
     # ── Write to SQLite ───────────────────────────────────────────────────────
-    print(f"Writing enriched chunks to {args.output} ...")
+    log.info("Writing enriched chunks to %s ...", args.output)
     conn = init_db(args.output)
 
     total_written, missing_doc, missing_sec = write_chunks_to_db(conn, chunks, cache)
 
     if missing_doc:
-        print(f"  Warning: {missing_doc} chunks missing document context")
+        log.warning("%d chunks missing document context", missing_doc)
     if missing_sec:
-        print(f"  Warning: {missing_sec} chunks missing section context")
+        log.warning("%d chunks missing section context", missing_sec)
 
     # Token stats from DB
     row = conn.execute("""
@@ -523,11 +562,11 @@ def main() -> None:
     conn.close()
 
     size_mb = args.output.stat().st_size / 1e6
-    print(f"  {total_written:,} chunks written")
-    print(f"  Avg original tokens : {avg_orig}")
-    print(f"  Avg enriched tokens : {avg_enriched}")
-    print(f"  Size                : {size_mb:.0f} MB")
-    print(f"  Database            : {args.output}")
+    log.info("Done — %d chunks written", total_written)
+    log.info("Avg original tokens : %d", avg_orig)
+    log.info("Avg enriched tokens : %d", avg_enriched)
+    log.info("DB size             : %.0f MB", size_mb)
+    log.info("Database            : %s", args.output)
 
 
 if __name__ == "__main__":

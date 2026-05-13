@@ -50,4 +50,4 @@ contextualized_chunks.db
 *.ipynb
 
 # Logs
-*.log
+contextualize.log
