@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Contextualizer — generates document and section contexts for every filing
-in chunks.jsonl, enriches all chunks, and writes contextualized_chunks.json.
+in chunks.jsonl, enriches all chunks, and writes contextualized_chunks.db
+(SQLite).
 
 Contexts are generated in parallel and cached to contexts_cache.json after
 each completed call, so interrupted runs can be resumed with --resume.
@@ -19,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -35,7 +37,7 @@ load_dotenv()
 
 CHUNKS_PATH   = Path("chunks.jsonl")
 CACHE_PATH    = Path("contexts_cache.json")
-OUTPUT_PATH   = Path("contextualized_chunks.json")
+OUTPUT_PATH   = Path("contextualized_chunks.db")
 
 DEFAULT_MODEL   = "gpt-5.4-mini"
 DEFAULT_WORKERS = 8
@@ -303,15 +305,67 @@ def run_parallel(
     return cache
 
 
-# ── Chunk enrichment ───────────────────────────────────────────────────────────
+# ── SQLite helpers ─────────────────────────────────────────────────────────────
 
-def enrich_chunks(
+def init_db(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA journal_mode=WAL")   # safe concurrent reads during write
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS chunks (
+            id               TEXT    PRIMARY KEY,
+            source_file      TEXT    NOT NULL,
+            chunk_index      INTEGER NOT NULL,
+            ticker           TEXT    NOT NULL,
+            company          TEXT    NOT NULL,
+            filing_type      TEXT    NOT NULL,
+            filing_date      TEXT    NOT NULL,
+            report_period    TEXT,
+            quarter          TEXT,
+            cik              TEXT,
+            section_id       TEXT    NOT NULL,
+            section_name     TEXT,
+            content_type     TEXT    NOT NULL,
+            document_context TEXT,
+            section_context  TEXT,
+            original_text    TEXT    NOT NULL,
+            enriched_text    TEXT    NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ticker
+            ON chunks(ticker);
+        CREATE INDEX IF NOT EXISTS idx_section
+            ON chunks(section_id);
+        CREATE INDEX IF NOT EXISTS idx_filing_date
+            ON chunks(filing_date);
+        CREATE INDEX IF NOT EXISTS idx_content
+            ON chunks(content_type);
+        CREATE INDEX IF NOT EXISTS idx_ticker_sec
+            ON chunks(ticker, section_id);
+        CREATE INDEX IF NOT EXISTS idx_ticker_date
+            ON chunks(ticker, filing_date);
+    """)
+    conn.commit()
+    return conn
+
+
+def write_chunks_to_db(
+    conn: sqlite3.Connection,
     chunks: list[dict],
     cache: dict,
-) -> list[dict]:
-    enriched = []
+) -> tuple[int, int, int]:
+    """
+    Enrich chunks from cache and upsert into the chunks table.
+    Returns (total_written, missing_doc_ctx, missing_sec_ctx).
+    """
     missing_doc = 0
     missing_sec = 0
+    rows = []
 
     for c in chunks:
         sf  = c["source_file"]
@@ -333,31 +387,37 @@ def enrich_chunks(
         parts.append(c["text"])
         enriched_text = "\n\n".join(parts)
 
-        enriched.append({
-            "source_file":      sf,
-            "chunk_index":      c["chunk_index"],
-            "ticker":           c["ticker"],
-            "company":          c["company"],
-            "filing_type":      c["filing_type"],
-            "filing_date":      c["filing_date"],
-            "report_period":    c.get("report_period", ""),
-            "quarter":          c.get("quarter", ""),
-            "cik":              c.get("cik", ""),
-            "section_id":       sid,
-            "section_name":     c.get("section_name", ""),
-            "content_type":     c.get("content_type", "text"),
-            "document_context": doc_ctx,
-            "section_context":  sec_ctx,
-            "original_text":    c["text"],
-            "enriched_text":    enriched_text,
-        })
+        rows.append((
+            f"{sf}__{c['chunk_index']}",   # id
+            sf,
+            c["chunk_index"],
+            c["ticker"],
+            c["company"],
+            c["filing_type"],
+            c["filing_date"],
+            c.get("report_period", ""),
+            c.get("quarter", ""),
+            c.get("cik", ""),
+            sid,
+            c.get("section_name", ""),
+            c.get("content_type", "text"),
+            doc_ctx,
+            sec_ctx,
+            c["text"],
+            enriched_text,
+        ))
 
-    if missing_doc:
-        print(f"  Warning: {missing_doc} chunks missing document context")
-    if missing_sec:
-        print(f"  Warning: {missing_sec} chunks missing section context")
+    conn.executemany("""
+        INSERT OR REPLACE INTO chunks (
+            id, source_file, chunk_index, ticker, company, filing_type,
+            filing_date, report_period, quarter, cik, section_id,
+            section_name, content_type, document_context, section_context,
+            original_text, enriched_text
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, rows)
+    conn.commit()
 
-    return enriched
+    return len(rows), missing_doc, missing_sec
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -428,36 +488,47 @@ def main() -> None:
         print(f"  Cache saved → {args.cache}")
     print()
 
-    # ── Enrich chunks ─────────────────────────────────────────────────────────
-    print("Enriching chunks ...")
-    enriched = enrich_chunks(chunks, cache)
+    # ── Write to SQLite ───────────────────────────────────────────────────────
+    print(f"Writing enriched chunks to {args.output} ...")
+    conn = init_db(args.output)
 
-    orig_tokens     = sum(len(c["original_text"]) // 4 for c in enriched)
-    enriched_tokens = sum(len(c["enriched_text"]) // 4 for c in enriched)
-    print(f"  {len(enriched):,} chunks enriched")
-    print(f"  Avg original tokens : {orig_tokens // len(enriched)}")
-    print(f"  Avg enriched tokens : {enriched_tokens // len(enriched)}")
-    print()
+    total_written, missing_doc, missing_sec = write_chunks_to_db(conn, chunks, cache)
 
-    # ── Write output ──────────────────────────────────────────────────────────
-    print(f"Writing {args.output} ...")
-    output = {
-        "meta": {
-            "total_chunks":         len(enriched),
-            "total_documents":      len(docs),
-            "model":                llm.model,
-            "generated_at":         datetime.utcnow().isoformat() + "Z",
-            "avg_original_tokens":  orig_tokens // len(enriched),
-            "avg_enriched_tokens":  enriched_tokens // len(enriched),
-        },
-        "chunks": enriched,
+    if missing_doc:
+        print(f"  Warning: {missing_doc} chunks missing document context")
+    if missing_sec:
+        print(f"  Warning: {missing_sec} chunks missing section context")
+
+    # Token stats from DB
+    row = conn.execute("""
+        SELECT AVG(LENGTH(original_text) / 4),
+               AVG(LENGTH(enriched_text) / 4)
+        FROM chunks
+    """).fetchone()
+    avg_orig, avg_enriched = int(row[0] or 0), int(row[1] or 0)
+
+    # Write meta table
+    meta = {
+        "total_chunks":        str(total_written),
+        "total_documents":     str(len(docs)),
+        "model":               llm.model,
+        "generated_at":        datetime.utcnow().isoformat() + "Z",
+        "avg_original_tokens": str(avg_orig),
+        "avg_enriched_tokens": str(avg_enriched),
     }
-    args.output.write_text(
-        json.dumps(output, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    conn.executemany(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        meta.items(),
     )
+    conn.commit()
+    conn.close()
+
     size_mb = args.output.stat().st_size / 1e6
-    print(f"  Done — {size_mb:.0f} MB written to {args.output}")
+    print(f"  {total_written:,} chunks written")
+    print(f"  Avg original tokens : {avg_orig}")
+    print(f"  Avg enriched tokens : {avg_enriched}")
+    print(f"  Size                : {size_mb:.0f} MB")
+    print(f"  Database            : {args.output}")
 
 
 if __name__ == "__main__":

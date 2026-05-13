@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Contextualization tester — runs the full document_context + section_context
-pipeline on 2 documents and writes enriched chunks to a JSON file.
+pipeline on 2 documents and writes enriched chunks to a SQLite database.
 
 Usage:
     python3 contextualization_tester.py
     python3 contextualization_tester.py --tickers MSFT TSLA
     python3 contextualization_tester.py --model ollama:llama3.2
-    python3 contextualization_tester.py --output my_test.json
+    python3 contextualization_tester.py --output my_test.db
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 from collections import defaultdict
@@ -24,14 +25,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CHUNKS_PATH  = Path("chunks.jsonl")
-DEFAULT_OUT  = Path("contextualization_test_output.json")
+CHUNKS_PATH     = Path("chunks.jsonl")
+DEFAULT_OUT     = Path("contextualization_test_output.db")
 DEFAULT_TICKERS = ["AAPL", "NVDA"]
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_MODEL   = "gpt-5.4-mini"
 
-# Characters sent to the LLM as input context — matches contextualization.md spec
 INPUT_CHARS = 3000
 
 
@@ -84,8 +84,8 @@ class LLMClient:
             sys.exit("openai not installed — run: pip install openai")
 
         if model.startswith("ollama:"):
-            self.model   = model[len("ollama:"):]
-            self._client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+            self.model    = model[len("ollama:"):]
+            self._client  = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
             self._backend = "ollama"
         else:
             api_key = os.environ.get("OPENAI_API_KEY")
@@ -115,7 +115,7 @@ def load_chunks_for_tickers(
     tickers: list[str],
     chunks_path: Path,
 ) -> dict[str, list[dict]]:
-    """Load chunks for the 2 most recent 10-K filings per ticker."""
+    """Load chunks for the most recent 10-K filing per ticker."""
     by_ticker: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
 
     with chunks_path.open(encoding="utf-8") as f:
@@ -129,39 +129,32 @@ def load_chunks_for_tickers(
         if ticker not in by_ticker:
             print(f"Warning: no 10-K chunks found for {ticker}", file=sys.stderr)
             continue
-        # Pick the most recent source file
         latest_file = sorted(by_ticker[ticker].keys())[-1]
         result[latest_file] = by_ticker[ticker][latest_file]
 
     return result
 
 
-def build_section_map(
-    chunks: list[dict],
-) -> dict[str, dict]:
-    """
-    Group chunks by section_id.
-    Returns {section_id: {"meta": {...}, "text": concatenated_text}}
-    """
+def build_section_map(chunks: list[dict]) -> dict[str, dict]:
     sections: dict[str, dict] = {}
     for c in chunks:
         sid = c["section_id"]
         if sid not in sections:
             sections[sid] = {
-                "section_id":   sid,
-                "section_name": c.get("section_name", ""),
-                "ticker":       c["ticker"],
-                "company":      c["company"],
-                "filing_type":  c["filing_type"],
-                "filing_date":  c["filing_date"],
-                "report_period":c.get("report_period", ""),
-                "text":         "",
+                "section_id":    sid,
+                "section_name":  c.get("section_name", ""),
+                "ticker":        c["ticker"],
+                "company":       c["company"],
+                "filing_type":   c["filing_type"],
+                "filing_date":   c["filing_date"],
+                "report_period": c.get("report_period", ""),
+                "text":          "",
             }
         sections[sid]["text"] += c["text"] + "\n\n"
     return sections
 
 
-# ── Main generation logic ───────────────────────────────────────────────────────
+# ── Context generation ─────────────────────────────────────────────────────────
 
 def generate_contexts(
     source_file: str,
@@ -172,28 +165,25 @@ def generate_contexts(
     Generate document_context and per-section section_context.
     Returns (document_context, {section_id: section_context}).
     """
-    meta = chunks[0]
+    meta     = chunks[0]
     sections = build_section_map(chunks)
 
-    # ── Document context ───────────────────────────────────────────────────────
-    # Use the first non-Preamble section as the document excerpt
     body_sections = [s for s in sections.values() if s["section_id"] != "Preamble"]
     excerpt_text  = body_sections[0]["text"] if body_sections else chunks[0]["text"]
 
     print(f"  Generating document context ...", end=" ", flush=True)
     t0 = time.time()
     doc_prompt = DOCUMENT_PROMPT.format(
-        company      = meta["company"],
-        ticker       = meta["ticker"],
-        filing_type  = meta["filing_type"],
-        filing_date  = meta["filing_date"],
-        report_period= meta.get("report_period", ""),
-        excerpt      = excerpt_text[:INPUT_CHARS],
+        company       = meta["company"],
+        ticker        = meta["ticker"],
+        filing_type   = meta["filing_type"],
+        filing_date   = meta["filing_date"],
+        report_period = meta.get("report_period", ""),
+        excerpt       = excerpt_text[:INPUT_CHARS],
     )
     doc_context = llm.complete(doc_prompt)
     print(f"done ({time.time() - t0:.1f}s)")
 
-    # ── Section contexts ───────────────────────────────────────────────────────
     section_contexts: dict[str, str] = {}
     for i, (sid, sec) in enumerate(sections.items(), 1):
         print(
@@ -236,35 +226,127 @@ def enrich_chunks(
         enriched_text = "\n\n".join(parts)
 
         enriched.append({
-            # Identifiers
             "source_file":      c["source_file"],
             "chunk_index":      c["chunk_index"],
-            # Metadata
             "ticker":           c["ticker"],
             "company":          c["company"],
             "filing_type":      c["filing_type"],
             "filing_date":      c["filing_date"],
+            "report_period":    c.get("report_period", ""),
+            "quarter":          c.get("quarter", ""),
+            "cik":              c.get("cik", ""),
             "section_id":       sid,
             "section_name":     c.get("section_name", ""),
             "content_type":     c.get("content_type", "text"),
-            # Contexts
             "document_context": doc_context,
             "section_context":  sec_context,
-            # Text
             "original_text":    c["text"],
             "enriched_text":    enriched_text,
-            # Token estimates
             "original_tokens":  estimate_tokens(c["text"]),
             "enriched_tokens":  estimate_tokens(enriched_text),
         })
     return enriched
 
 
+# ── SQLite writer ──────────────────────────────────────────────────────────────
+
+def init_db(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS chunks (
+            id               TEXT    PRIMARY KEY,
+            source_file      TEXT    NOT NULL,
+            chunk_index      INTEGER NOT NULL,
+            ticker           TEXT    NOT NULL,
+            company          TEXT    NOT NULL,
+            filing_type      TEXT    NOT NULL,
+            filing_date      TEXT    NOT NULL,
+            report_period    TEXT,
+            quarter          TEXT,
+            cik              TEXT,
+            section_id       TEXT    NOT NULL,
+            section_name     TEXT,
+            content_type     TEXT    NOT NULL,
+            document_context TEXT,
+            section_context  TEXT,
+            original_text    TEXT    NOT NULL,
+            enriched_text    TEXT    NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ticker
+            ON chunks(ticker);
+        CREATE INDEX IF NOT EXISTS idx_section
+            ON chunks(section_id);
+        CREATE INDEX IF NOT EXISTS idx_filing_date
+            ON chunks(filing_date);
+        CREATE INDEX IF NOT EXISTS idx_content
+            ON chunks(content_type);
+        CREATE INDEX IF NOT EXISTS idx_ticker_sec
+            ON chunks(ticker, section_id);
+        CREATE INDEX IF NOT EXISTS idx_ticker_date
+            ON chunks(ticker, filing_date);
+    """)
+    conn.commit()
+    return conn
+
+
+def write_to_db(
+    conn: sqlite3.Connection,
+    enriched_chunks: list[dict],
+    meta: dict,
+) -> None:
+    rows = [
+        (
+            f"{c['source_file']}__{c['chunk_index']}",
+            c["source_file"],
+            c["chunk_index"],
+            c["ticker"],
+            c["company"],
+            c["filing_type"],
+            c["filing_date"],
+            c["report_period"],
+            c["quarter"],
+            c["cik"],
+            c["section_id"],
+            c["section_name"],
+            c["content_type"],
+            c["document_context"],
+            c["section_context"],
+            c["original_text"],
+            c["enriched_text"],
+        )
+        for c in enriched_chunks
+    ]
+
+    conn.executemany("""
+        INSERT OR REPLACE INTO chunks (
+            id, source_file, chunk_index, ticker, company, filing_type,
+            filing_date, report_period, quarter, cik, section_id,
+            section_name, content_type, document_context, section_context,
+            original_text, enriched_text
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, rows)
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        meta.items(),
+    )
+
+    conn.commit()
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Test contextualization on 2 documents"
+        description="Test contextualization on 2 documents, write to SQLite"
     )
     parser.add_argument(
         "--tickers", nargs=2, default=DEFAULT_TICKERS,
@@ -277,7 +359,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--output", type=Path, default=DEFAULT_OUT,
-        help=f"Output JSON file (default: {DEFAULT_OUT})",
+        help=f"Output SQLite database (default: {DEFAULT_OUT})",
     )
     parser.add_argument(
         "--chunks", type=Path, default=CHUNKS_PATH,
@@ -294,7 +376,7 @@ def main() -> None:
     print(f"Output  : {args.output}")
     print()
 
-    # ── Load chunks ────────────────────────────────────────────────────────────
+    # ── Load ───────────────────────────────────────────────────────────────────
     print("Loading chunks ...")
     doc_chunks = load_chunks_for_tickers(tickers, args.chunks)
     if not doc_chunks:
@@ -305,10 +387,10 @@ def main() -> None:
         print(f"  {sf}: {len(chunks)} chunks across {len(sections)} sections")
     print()
 
-    # ── Generate contexts and enrich ───────────────────────────────────────────
-    llm = LLMClient(args.model)
+    # ── Generate and enrich ────────────────────────────────────────────────────
+    llm          = LLMClient(args.model)
     all_enriched: list[dict] = []
-    run_start = time.time()
+    run_start    = time.time()
 
     for source_file, chunks in doc_chunks.items():
         ticker = chunks[0]["ticker"]
@@ -320,7 +402,7 @@ def main() -> None:
 
     total_elapsed = time.time() - run_start
 
-    # ── Summary stats ──────────────────────────────────────────────────────────
+    # ── Stats ──────────────────────────────────────────────────────────────────
     orig_tokens     = sum(c["original_tokens"] for c in all_enriched)
     enriched_tokens = sum(c["enriched_tokens"] for c in all_enriched)
     avg_orig        = orig_tokens / len(all_enriched)
@@ -336,22 +418,29 @@ def main() -> None:
     print(f"  Total time          : {total_elapsed:.1f}s")
     print()
 
-    # ── Write output ───────────────────────────────────────────────────────────
-    output = {
-        "meta": {
-            "tickers":        tickers,
-            "model":          llm.model,
-            "documents":      list(doc_chunks.keys()),
-            "total_chunks":   len(all_enriched),
-            "avg_original_tokens": round(avg_orig),
-            "avg_enriched_tokens": round(avg_enriched),
-            "elapsed_seconds":    round(total_elapsed, 1),
-        },
-        "chunks": all_enriched,
+    # ── Write to SQLite ────────────────────────────────────────────────────────
+    from datetime import datetime, timezone
+    meta_record = {
+        "generated_at":        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "model":               llm.model,
+        "tickers":             ",".join(tickers),
+        "total_chunks":        str(len(all_enriched)),
+        "total_documents":     str(len(doc_chunks)),
+        "avg_original_tokens": str(round(avg_orig)),
+        "avg_enriched_tokens": str(round(avg_enriched)),
     }
 
-    args.output.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"Output written → {args.output}  ({args.output.stat().st_size / 1e3:.0f} KB)")
+    conn = init_db(args.output)
+    write_to_db(conn, all_enriched, meta_record)
+    conn.close()
+
+    size_kb = args.output.stat().st_size / 1_000
+    print(f"Database written → {args.output}  ({size_kb:.0f} KB)")
+    print(f"  Rows in chunks table : {len(all_enriched)}")
+    print()
+    print(f"Inspect with:")
+    print(f"  python3 query_db.py --db {args.output} --summary")
+    print(f"  python3 query_db.py --db {args.output} --ticker {tickers[0]}")
 
 
 if __name__ == "__main__":

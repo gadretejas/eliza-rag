@@ -25,12 +25,8 @@ ENV/
 # Claude
 .claude/
 
-# Generated data — large files, rebuild from scripts
-chunks.jsonl
-index.faiss
-contextualized_chunks.json
-contexts_cache.json
-contextualization_test_output.json
+# Full corpus DB — may exceed GitHub's 100 MB limit; revisit after full run
+contextualized_chunks.db
 
 # Environment variables
 .env
