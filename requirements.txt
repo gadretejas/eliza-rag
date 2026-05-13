@@ -1,0 +1,10 @@
+# Core
+openai>=1.0
+faiss-cpu>=1.7
+sentence-transformers>=3.0
+numpy>=1.24
+anthropic>=0.40
+
+# Optional re-rankers (uncomment as needed)
+# cohere>=5.0
+# voyageai>=0.3
