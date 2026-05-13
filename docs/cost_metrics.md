@@ -27,7 +27,7 @@ All costs are one-time unless noted. Once an artifact is generated it is reused 
 
 The full corpus estimate is extrapolated directly from the measured $0.04 test cost rather than theoretical token counts — actual cost per call came in lower than the $3.29 theoretical estimate in [contextualization.md](contextualization.md) because real prompts used fewer tokens than the assumed maximum.
 
-> **Important:** `contexts.json` is generated once and reused. Re-embedding the corpus with a different embedding model costs nothing extra on the LLM side.
+> **Important:** `contextualized_chunks.db` is generated once and reused. Re-embedding the corpus with a different embedding model costs nothing extra on the LLM side.
 
 ---
 

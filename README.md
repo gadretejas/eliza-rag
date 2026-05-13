@@ -81,7 +81,7 @@ python3 contextualization_tester.py
 python3 query_db.py --db contextualization_test_output.db --summary
 python3 query_db.py --db contextualization_test_output.db --ticker AAPL --section "Item 1A"
 
-# Full corpus (~$2.43, parallelised with resume support)
+# Full corpus (~$2.43, resumes automatically if interrupted)
 python3 contextualize.py
 # → contextualized_chunks.db
 ```
@@ -156,7 +156,7 @@ Each enriched chunk stored in the DB:
 ```
 
 **Cost:** ~$2.43 for the full corpus (measured at $0.04/49 calls on 2 documents)  
-**Resume:** interrupted runs continue from `contexts_cache.json` — no API calls are repeated  
+**Resume:** cache is loaded automatically on every run — re-run the same command after any interruption. Use `--fresh` to force regeneration.  
 **Inspect:** `python3 query_db.py --summary` · `--ticker AAPL` · `--search "supply chain"`  
 **Docs:** [docs/contextualization.md](docs/contextualization.md) · [docs/sqlite_storage.md](docs/sqlite_storage.md) · [docs/cost_metrics.md](docs/cost_metrics.md)
 

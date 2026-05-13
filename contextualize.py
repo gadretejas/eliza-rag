@@ -5,11 +5,12 @@ in chunks.jsonl, enriches all chunks, and writes contextualized_chunks.db
 (SQLite).
 
 Contexts are generated in parallel and cached to contexts_cache.json after
-each completed call, so interrupted runs can be resumed with --resume.
+each completed call. The cache is loaded automatically on every run, so
+interrupted runs resume from where they left off with no extra flags.
 
 Usage:
-    python3 contextualize.py                        # full run, gpt-5.4-mini
-    python3 contextualize.py --resume               # skip already-cached docs
+    python3 contextualize.py                        # full run, resumes automatically
+    python3 contextualize.py --fresh                # ignore cache, regenerate all
     python3 contextualize.py --workers 10           # parallel workers (default 8)
     python3 contextualize.py --model gpt-5.4        # higher quality
     python3 contextualize.py --model ollama:llama3.2
