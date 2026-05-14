@@ -16,6 +16,7 @@ import argparse
 import os
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -163,6 +164,40 @@ class LLMClient:
         except Exception as e:
             sys.exit(f"LLM call failed ({self._provider}/{self.model}): {e}")
 
+    def stream(
+        self,
+        system: str,
+        user: str,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+    ) -> Iterator[str]:
+        """Yield raw token strings as they arrive from the provider."""
+        if self._provider == "anthropic":
+            with self._anthropic.messages.stream(  # type: ignore[union-attr]
+                model=self.model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            ) as s:
+                for text in s.text_stream:
+                    yield text
+        else:
+            response = self._openai.chat.completions.create(  # type: ignore[union-attr]
+                model=self.model,
+                temperature=temperature,
+                max_completion_tokens=max_tokens,
+                stream=True,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user},
+                ],
+            )
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+
 
 # ── Prompt helpers ─────────────────────────────────────────────────────────────
 
@@ -261,6 +296,70 @@ class AnswerEngine:
     def answer_with_trace(self, question: str) -> Answer:
         """Return a grounded Answer with RetrievalTrace attached."""
         return self._run(question, trace=True)
+
+    def answer_stream(self, question: str) -> Iterator[dict]:
+        """
+        Yield SSE-ready dicts in order:
+          {"type": "sources",   "sources": [...]}   ← emitted before LLM call
+          {"type": "chunk",     "text": "..."}       ← one per token
+          {"type": "citations", "valid": [1, 2, 3]}  ← after stream ends
+          {"type": "done"}
+        On failure yields {"type": "error", "detail": "..."} and stops.
+        """
+        cfg = self.config
+        try:
+            retrieval_trace = self._get_retriever().retrieve_with_trace(question)
+            chunks = retrieval_trace.final_chunks
+        except Exception as e:
+            yield {"type": "error", "detail": f"Retrieval failed: {e}"}
+            return
+
+        # Emit sources immediately so the browser can render them before the
+        # first token arrives.
+        sources_payload = [
+            {
+                "index":       i + 1,
+                "ticker":      c["ticker"],
+                "filing_type": c["filing_type"].split()[0],
+                "filing_date": c["filing_date"],
+                "section":     c["section_id"],
+                "snippet":     c["text"][:400],
+            }
+            for i, c in enumerate(chunks)
+        ]
+        yield {"type": "sources", "sources": sources_payload}
+
+        if not chunks:
+            yield {"type": "chunk", "text": (
+                "The available filings do not contain enough information "
+                "to answer this question."
+            )}
+            yield {"type": "citations", "valid": []}
+            yield {"type": "done"}
+            return
+
+        user_message = build_prompt(question, chunks, cfg.max_chunk_chars)
+        llm          = self._get_llm()
+        accumulated  = ""
+
+        try:
+            for token in llm.stream(
+                self._get_system_prompt(),
+                user_message,
+                temperature=cfg.temperature,
+                max_tokens=cfg.max_tokens,
+            ):
+                accumulated += token
+                yield {"type": "chunk", "text": token}
+        except Exception as e:
+            yield {"type": "error", "detail": f"LLM stream failed: {e}"}
+            return
+
+        # Parse citations from the full accumulated text.
+        _, citations = parse_citations(accumulated, chunks)
+        valid_indices = [c.index for c in citations]
+        yield {"type": "citations", "valid": valid_indices}
+        yield {"type": "done"}
 
     # ── internals ─────────────────────────────────────────────────────────────
 

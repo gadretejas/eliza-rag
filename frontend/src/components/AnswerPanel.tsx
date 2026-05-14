@@ -6,10 +6,11 @@ interface Props {
   chunkCount: number;
   activeIndex: number | null;
   onCitationClick: (index: number) => void;
+  pending?: boolean;
 }
 
-export default function AnswerPanel({ text, model, chunkCount, activeIndex, onCitationClick }: Props) {
-  const nodes = renderWithCitations(text, activeIndex, onCitationClick);
+export default function AnswerPanel({ text, model, chunkCount, activeIndex, onCitationClick, pending = false }: Props) {
+  const nodes = renderWithCitations(text, activeIndex, onCitationClick, pending);
 
   return (
     <section>
@@ -29,7 +30,8 @@ export default function AnswerPanel({ text, model, chunkCount, activeIndex, onCi
 function renderWithCitations(
   text: string,
   activeIndex: number | null,
-  onCitationClick: (i: number) => void
+  onCitationClick: (i: number) => void,
+  pending: boolean,
 ) {
   const parts = text.split(/(\[\d+\])/g);
   return parts.map((part, i) => {
@@ -40,8 +42,9 @@ function renderWithCitations(
         <CitationChip
           key={i}
           index={idx}
-          active={activeIndex === idx}
-          onClick={() => onCitationClick(idx)}
+          active={!pending && activeIndex === idx}
+          onClick={pending ? undefined : () => onCitationClick(idx)}
+          pending={pending}
         />
       );
     }

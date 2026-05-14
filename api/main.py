@@ -8,8 +8,13 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
+import json
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.answer.answer import AnswerEngine, AnswerConfig
@@ -81,6 +86,49 @@ async def ask(req: AskRequest) -> AskResponse:
     ]
 
     return AskResponse(answer=result.answer_text, sources=sources)
+
+
+_stream_executor = ThreadPoolExecutor(max_workers=4)
+
+
+@app.post("/api/ask/stream")
+async def ask_stream(req: AskRequest) -> StreamingResponse:
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="question must not be empty")
+
+    engine = _get_engine(req)
+
+    async def generate():
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        def run_sync():
+            try:
+                for event in engine.answer_stream(req.question):
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+            except Exception as e:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait, {"type": "error", "detail": str(e)}
+                )
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        loop.run_in_executor(_stream_executor, run_sync)
+
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/health")

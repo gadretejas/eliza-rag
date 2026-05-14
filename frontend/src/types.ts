@@ -26,6 +26,14 @@ export interface AskRequest {
   base_url?: string;
 }
 
+export interface StreamCallbacks {
+  onSources:   (sources: Source[]) => void;
+  onChunk:     (text: string) => void;
+  onCitations: (valid: number[]) => void;
+  onDone:      () => void;
+  onError:     (detail: string) => void;
+}
+
 export interface AskResponse {
   answer: string;
   sources: Source[];

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { askQuestion } from "./api";
-import type { AskResponse, SavedModel } from "./types";
+import { useState, useRef } from "react";
+import { streamQuestion } from "./api";
+import type { Source, SavedModel } from "./types";
 import { useTheme } from "./useTheme";
 import QueryBox from "./components/QueryBox";
 import AnswerPanel from "./components/AnswerPanel";
@@ -30,13 +30,17 @@ export default function App() {
   const { theme, toggle }             = useTheme();
   const [page, setPage]               = useState<Page>("chat");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [savedModels, setSavedModels] = useState<SavedModel[]>(loadSavedModels);
-  const [question, setQuestion]       = useState("");
-  const [model, setModel]             = useState("gpt-5.4-mini");
-  const [result, setResult]           = useState<AskResponse | null>(null);
-  const [loading, setLoading]         = useState(false);
-  const [error, setError]             = useState<string | null>(null);
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [savedModels, setSavedModels]       = useState<SavedModel[]>(loadSavedModels);
+  const [question, setQuestion]             = useState("");
+  const [model, setModel]                   = useState("gpt-5.4-mini");
+  const [streamingText, setStreamingText]   = useState("");
+  const [sources, setSources]               = useState<Source[]>([]);
+  const [validCitations, setValidCitations] = useState<number[]>([]);
+  const [streaming, setStreaming]           = useState(false);
+  const [done, setDone]                     = useState(false);
+  const [error, setError]                   = useState<string | null>(null);
+  const [activeIndex, setActiveIndex]       = useState<number | null>(null);
+  const abortRef                            = useRef<AbortController | null>(null);
 
   function handleAddModel(m: SavedModel) {
     const updated = [...savedModels, m];
@@ -52,31 +56,46 @@ export default function App() {
   }
 
   async function handleSubmit() {
-    if (!question.trim() || loading) return;
-    setLoading(true);
+    if (!question.trim() || streaming) return;
+
+    // Cancel any in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setStreaming(true);
+    setDone(false);
     setError(null);
-    setResult(null);
+    setStreamingText("");
+    setSources([]);
+    setValidCitations([]);
     setActiveIndex(null);
 
-    try {
-      const custom = savedModels.find((m) => m.id === model);
-      const req = custom
-        ? {
-            question,
-            model:    custom.modelName,
-            top_k:    15,
-            provider: custom.provider,
-            api_key:  custom.apiKey || undefined,
-            base_url: custom.baseUrl || undefined,
-          }
-        : { question, model, top_k: 15 };
+    const custom = savedModels.find((m) => m.id === model);
+    const req = custom
+      ? {
+          question,
+          model:    custom.modelName,
+          top_k:    15,
+          provider: custom.provider,
+          api_key:  custom.apiKey || undefined,
+          base_url: custom.baseUrl || undefined,
+        }
+      : { question, model, top_k: 15 };
 
-      const res = await askQuestion(req);
-      setResult(res);
+    try {
+      await streamQuestion(req, {
+        onSources:   (s) => setSources(s),
+        onChunk:     (t) => setStreamingText((prev) => prev + t),
+        onCitations: (v) => setValidCitations(v),
+        onDone:      ()  => { setStreaming(false); setDone(true); },
+        onError:     (d) => { setStreaming(false); setError(d); },
+      }, controller.signal);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
-    } finally {
-      setLoading(false);
+      if ((e as Error).name !== "AbortError") {
+        setError(e instanceof Error ? e.message : "Something went wrong");
+      }
+      setStreaming(false);
     }
   }
 
@@ -132,7 +151,7 @@ export default function App() {
                   value={model}
                   savedModels={savedModels}
                   onChange={setModel}
-                  disabled={loading}
+                  disabled={streaming}
                 />
               )}
             </div>
@@ -149,7 +168,7 @@ export default function App() {
         />
       ) : page === "about" ? (
         <AboutDataPage />
-      ) : !result && !loading && !error ? (
+      ) : !streaming && !done && !error ? (
         /* ── Centered empty state ── */
         <main className="max-w-3xl mx-auto px-4 w-full
                          min-h-[calc(100vh-57px)] flex flex-col items-center justify-center
@@ -178,18 +197,18 @@ export default function App() {
               value={question}
               onChange={setQuestion}
               onSubmit={handleSubmit}
-              loading={loading}
+              loading={streaming}
             />
           </div>
         </main>
       ) : (
-        /* ── Active state: query at top, answer below ── */
+        /* ── Active state: query at top, answer streams below ── */
         <main className="max-w-3xl mx-auto px-4 py-8 flex flex-col gap-8">
           <QueryBox
             value={question}
             onChange={setQuestion}
             onSubmit={handleSubmit}
-            loading={loading}
+            loading={streaming}
           />
 
           {error && (
@@ -201,7 +220,31 @@ export default function App() {
             </div>
           )}
 
-          {loading && (
+          {/* Answer streams in; citations are pending until streaming ends */}
+          {streamingText && (
+            <>
+              <div className="border-t border-gray-100 dark:border-slate-800" />
+              <AnswerPanel
+                text={streamingText}
+                model={model}
+                chunkCount={sources.length}
+                activeIndex={activeIndex}
+                onCitationClick={handleCitationClick}
+                pending={streaming}
+              />
+            </>
+          )}
+
+          {/* Sources arrive before the answer — shown below once retrieved */}
+          {sources.length > 0 && (
+            <>
+              <div className="border-t border-gray-100 dark:border-slate-800" />
+              <SourceList sources={sources} activeIndex={activeIndex} />
+            </>
+          )}
+
+          {/* Retrieval in progress but no tokens yet */}
+          {streaming && !streamingText && (
             <div className="flex flex-col gap-4 animate-pulse">
               <div className="h-3 bg-gray-100 dark:bg-slate-800 rounded w-16" />
               <div className="flex flex-col gap-2">
@@ -212,21 +255,6 @@ export default function App() {
                 <div className="h-4 bg-gray-100 dark:bg-slate-800 rounded w-3/4" />
               </div>
             </div>
-          )}
-
-          {result && !loading && (
-            <>
-              <div className="border-t border-gray-100 dark:border-slate-800" />
-              <AnswerPanel
-                text={result.answer}
-                model={model}
-                chunkCount={result.sources.length}
-                activeIndex={activeIndex}
-                onCitationClick={handleCitationClick}
-              />
-              <div className="border-t border-gray-100 dark:border-slate-800" />
-              <SourceList sources={result.sources} activeIndex={activeIndex} />
-            </>
           )}
         </main>
       )}
