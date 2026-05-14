@@ -4,7 +4,24 @@ Each version records the full prompt text, the motivation for the change, and th
 
 ---
 
-## v1 — Initial prompt
+## v5 — LLM-based query routing with corpus context
+
+**Date:** 2026-05-13
+**Change:** Replaced hardcoded regex-based ticker extraction in `QueryRouter` with a two-stage approach: fast regex path for explicit company names, LLM fallback for industry/category terms. Added `_CORPUS_CONTEXT` constant to `retrieve.py` that maps all 54 corpus tickers to their company names and sectors, injected as a system prompt into the routing LLM call.
+**Motivation:** Category questions such as "major pharmaceutical companies" or "chip makers" returned no tickers from the regex path, causing a global search that saturated on whichever company happened to dominate the vector space. In testing, "What regulatory risks do major pharmaceutical companies face?" returned 15 Pfizer chunks. With LLM routing, the same question correctly resolves to `[ABBV, JNJ, LLY, MRK, PFE, TMO, UNH]` and the per-company balancing spreads chunks across all 7 companies.
+
+**Changes from v4:**
+- No change to `prompts/system_prompt.md` (the answer LLM prompt is unchanged)
+- Change is in `src/retrieval/retrieve.py`:
+  - Added `_CORPUS_CONTEXT` — 54 tickers organised by sector with company names
+  - `QueryRouter.__init__` now creates an OpenAI client if `OPENAI_API_KEY` is set
+  - `_extract_tickers()` tries regex first; on empty result makes a `gpt-5.4-mini` chat call with `_CORPUS_CONTEXT` as system prompt, parses the returned JSON ticker array, and validates each ticker against the known corpus before returning
+
+**Note:** `prompts/system_prompt.md` is unchanged. This version documents a retrieval-layer change that significantly improves multi-company and category-level questions.
+
+---
+
+## v4 — 10-Q section structure
 
 **Date:** 2026-05-13
 **Change:** Initial version written alongside `answer.py`.

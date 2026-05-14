@@ -18,8 +18,7 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Iterator
 
-CORPUS_DIR = Path("edgar_corpus")
-OUTPUT_PATH = Path("chunks.jsonl")
+from src.config import CORPUS_DIR, CHUNKS_PATH as OUTPUT_PATH
 
 MAX_CHUNK_CHARS = 2000  # ~500 tokens
 OVERLAP_CHARS   = 300   # ~75 tokens

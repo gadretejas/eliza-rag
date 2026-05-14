@@ -29,13 +29,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_PATH         = Path("contextualized_chunks.db")
-CHUNKS_PATH     = Path("chunks.jsonl")
-CHROMA_PATH     = "chroma_store"
-COLLECTION_NAME = "sec_filings"
-
-OPENAI_MODEL = "text-embedding-3-small"
-LOCAL_MODEL  = "all-MiniLM-L6-v2"
+from src.config import (
+    CONTEXTUALIZED_DB as DB_PATH, CHUNKS_PATH, CHROMA_PATH,
+    COLLECTION_NAME, OPENAI_EMBED_MODEL as OPENAI_MODEL,
+    LOCAL_EMBED_MODEL as LOCAL_MODEL, EMBED_LOG,
+)
 
 MAX_RETRIES  = 6
 BACKOFF_BASE = 1.0
@@ -391,8 +389,8 @@ def main() -> None:
                         help=f"SQLite DB path (default: {DB_PATH})")
     parser.add_argument("--chunks",     type=Path, default=CHUNKS_PATH,
                         help=f"Fallback chunks.jsonl (default: {CHUNKS_PATH})")
-    parser.add_argument("--log",        default="embed.log",
-                        help="Log file path (default: embed.log)")
+    parser.add_argument("--log",        default=str(EMBED_LOG),
+                        help=f"Log file path (default: {EMBED_LOG})")
     args = parser.parse_args()
 
     log = setup_logging(args.log)

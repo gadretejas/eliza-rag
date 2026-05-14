@@ -18,8 +18,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DEFAULT_DB   = Path("contextualized_chunks.db")
-FALLBACK_DB  = Path("contextualization_test_output.db")
+from src.config import CONTEXTUALIZED_DB as DEFAULT_DB, TEST_DB_PATH as FALLBACK_DB
+
 PREVIEW_CHARS = 400
 
 

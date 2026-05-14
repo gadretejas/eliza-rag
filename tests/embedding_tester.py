@@ -25,12 +25,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_PATH          = Path("contextualized_chunks.db")
-TEST_COLLECTION  = "sec_filings_test"
-CHROMA_PATH      = "chroma_store"
+from src.config import (
+    CONTEXTUALIZED_DB as DB_PATH, TEST_COLLECTION_NAME as TEST_COLLECTION,
+    CHROMA_PATH, OPENAI_EMBED_MODEL as OPENAI_MODEL, LOCAL_EMBED_MODEL as LOCAL_MODEL,
+)
+
 DEFAULT_SAMPLE   = 50
-OPENAI_MODEL     = "text-embedding-3-small"
-LOCAL_MODEL      = "all-MiniLM-L6-v2"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

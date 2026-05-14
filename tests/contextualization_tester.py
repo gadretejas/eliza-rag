@@ -25,11 +25,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CHUNKS_PATH     = Path("chunks.jsonl")
-DEFAULT_OUT     = Path("contextualization_test_output.db")
+from src.config import (
+    CHUNKS_PATH, TEST_DB_PATH as DEFAULT_OUT, OLLAMA_BASE_URL,
+)
+
 DEFAULT_TICKERS = ["AAPL", "NVDA"]
 
-OLLAMA_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_MODEL   = "gpt-5.4-mini"
 
 INPUT_CHARS = 3000

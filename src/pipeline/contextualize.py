@@ -37,17 +37,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CHUNKS_PATH   = Path("chunks.jsonl")
-CACHE_PATH    = Path("contexts_cache.json")
-OUTPUT_PATH   = Path("contextualized_chunks.db")
-LOG_PATH      = Path("contextualize.log")
+from src.config import (
+    CHUNKS_PATH, CACHE_PATH, CONTEXTUALIZED_DB as OUTPUT_PATH,
+    CONTEXTUALIZE_LOG as LOG_PATH, OLLAMA_BASE_URL,
+)
 
 DEFAULT_MODEL   = "gpt-5.4-mini"
 DEFAULT_WORKERS = 8
 INPUT_CHARS     = 3000
 LOG_INTERVAL    = 50   # log a progress line every N completed tasks
-
-OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
 
 # ── Logging setup ──────────────────────────────────────────────────────────────

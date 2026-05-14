@@ -28,8 +28,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CHROMA_PATH     = "chroma_store"
-COLLECTION_NAME = "sec_filings"
+from src.config import (
+    CHROMA_PATH, COLLECTION_NAME,
+    OPENAI_EMBED_MODEL, LOCAL_EMBED_MODEL,
+)
 
 # Maps the short filing_type used by QueryRouter to the full stored value
 _FILING_TYPE_MAP = {
@@ -124,6 +126,32 @@ _COMPANY_ALIASES: dict[str, str] = {
 # Pre-sort longest alias first to avoid partial-match shadowing
 _SORTED_ALIASES = sorted(_COMPANY_ALIASES.items(), key=lambda x: -len(x[0]))
 
+# Corpus context injected into the routing LLM call so it can resolve industry
+# terms and category questions (e.g. "pharmaceutical companies") to tickers.
+_CORPUS_CONTEXT = """\
+The SEC filings corpus contains these companies, grouped by sector:
+
+Technology:        AAPL (Apple), MSFT (Microsoft), NVDA (NVIDIA), META (Meta/Facebook),
+                   GOOG (Alphabet/Google), AMZN (Amazon), AMD, INTC (Intel),
+                   ADBE (Adobe), ORCL (Oracle), CRM (Salesforce), CSCO (Cisco),
+                   IBM, NFLX (Netflix)
+Semiconductors:    NVDA (NVIDIA), AMD, INTC (Intel)
+Healthcare/Pharma: PFE (Pfizer), JNJ (Johnson & Johnson), MRK (Merck),
+                   LLY (Eli Lilly), ABBV (AbbVie), UNH (UnitedHealth), TMO (Thermo Fisher)
+Financial/Banking: JPM (JPMorgan Chase), GS (Goldman Sachs), MS (Morgan Stanley),
+                   BAC (Bank of America), BLK (BlackRock), AXP (American Express),
+                   MA (Mastercard), V (Visa), BRK (Berkshire Hathaway)
+Energy:            XOM (ExxonMobil), CVX (Chevron)
+Consumer/Retail:   WMT (Walmart), COST (Costco), MCD (McDonald's), SBUX (Starbucks),
+                   KO (Coca-Cola), PEP (PepsiCo), TGT (Target), NKE (Nike),
+                   PG (Procter & Gamble), HD (Home Depot)
+Media/Entertainment: DIS (Disney), NFLX (Netflix), CMCSA (Comcast)
+Industrial/Defense: CAT (Caterpillar), DE (John Deere), BA (Boeing),
+                    RTX (Raytheon), LMT (Lockheed Martin), GE
+Telecom:           T (AT&T), VZ (Verizon), CMCSA (Comcast)
+Automotive:        TSLA (Tesla)
+"""
+
 # Signal words → section IDs. Listed in priority order; first match wins for
 # the primary section. A question can match multiple groups.
 _SECTION_SIGNALS: list[tuple[list[str], list[str]]] = [
@@ -188,6 +216,15 @@ class RouteResult:
 class QueryRouter:
     """Converts a natural-language question into structured retrieval filters."""
 
+    def __init__(self) -> None:
+        self._llm_client: Any | None = None
+        if os.environ.get("OPENAI_API_KEY"):
+            try:
+                from openai import OpenAI
+                self._llm_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            except ImportError:
+                pass
+
     def route(self, question: str) -> RouteResult:
         date_from, date_to = self._extract_date_range(question)
         return RouteResult(
@@ -201,12 +238,49 @@ class QueryRouter:
     # ── private helpers ────────────────────────────────────────────────────────
 
     def _extract_tickers(self, question: str) -> list[str]:
+        # Fast path: regex match against known aliases
         q = question.lower()
         found: set[str] = set()
         for alias, ticker in _SORTED_ALIASES:
             if re.search(r"\b" + re.escape(alias) + r"\b", q):
                 found.add(ticker)
-        return sorted(found)
+        if found:
+            return sorted(found)
+
+        # Slow path: LLM call to resolve industry/category terms when no
+        # specific company name was found (e.g. "pharmaceutical companies").
+        if self._llm_client is None:
+            return []
+
+        import json as _json
+        try:
+            resp = self._llm_client.chat.completions.create(
+                model="gpt-5.4-mini",
+                temperature=0,
+                max_completion_tokens=64,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"{_CORPUS_CONTEXT}\n"
+                            "Your job is to identify which company tickers from the corpus "
+                            "are relevant to a user question. Return ONLY a JSON array of "
+                            "ticker symbols (e.g. [\"PFE\",\"JNJ\"]). If the question is "
+                            "general and not about specific companies or sectors, return []."
+                        ),
+                    },
+                    {"role": "user", "content": question},
+                ],
+            )
+            raw = resp.choices[0].message.content.strip()
+            tickers = _json.loads(raw)
+            if isinstance(tickers, list):
+                # Validate against known corpus tickers
+                valid = set(_COMPANY_ALIASES.values())
+                return sorted(t for t in tickers if t in valid)
+        except Exception:
+            pass
+        return []
 
     def _extract_sections(self, question: str) -> list[str]:
         q = question.lower()
@@ -245,6 +319,10 @@ class QueryRouter:
             return "10-K"
         if "quarterly" in q or "10-q" in q or "10q" in q:
             return "10-Q"
+        # Risk factor questions → prefer 10-K (10-Qs say "no material changes")
+        sections = self._extract_sections(question)
+        if sections == ["Item 1A"]:
+            return "10-K"
         return None
 
 
@@ -442,6 +520,30 @@ def _apply_date_penalty(
         result.append((score * penalty if not in_window else score, chunk))
 
     return sorted(result, key=lambda x: x[0], reverse=True)
+
+
+_RECENCY_DECAY = 0.95  # score multiplier per year of filing age
+
+
+def _apply_recency_preference(
+    candidates: list[tuple[float, dict]],
+) -> list[tuple[float, dict]]:
+    """Gently prefer newer filings when no explicit date was requested.
+
+    Applies 0.95^years_old to each chunk's score so a 3-year-old chunk needs
+    to be meaningfully more relevant (not just a marginal tie) to beat a current one.
+    """
+    today = date.today()
+    result = []
+    for score, chunk in candidates:
+        try:
+            fd = date.fromisoformat(chunk.get("filing_date", ""))
+            years_old = (today - fd).days / 365.25
+            score = score * (_RECENCY_DECAY ** years_old)
+        except (ValueError, TypeError):
+            pass
+        result.append((score, chunk))
+    return result
 
 
 # ── Re-ranker ──────────────────────────────────────────────────────────────────
@@ -649,6 +751,10 @@ class HybridRetriever:
             # Too few results in window — apply soft penalty instead of hard cut
             candidates = _apply_date_penalty(candidates, route.date_from, route.date_to)
 
+        # ── recency preference (only when no explicit date in question) ───────
+        if route.date_from is None and route.date_to is None:
+            candidates = _apply_recency_preference(candidates)
+
         # ── re-rank ───────────────────────────────────────────────────────────
         if cfg.rerank and cfg.reranker != "none":
             ranked = self._get_reranker().rerank(question, candidates)
@@ -741,7 +847,7 @@ def _make_openai_embedder():
     def embed(text: str) -> np.ndarray:
         resp = client.embeddings.create(
             input=[text],
-            model="text-embedding-3-small",
+            model=OPENAI_EMBED_MODEL,
         )
         vec = np.array(resp.data[0].embedding, dtype=np.float32)
         vec /= max(np.linalg.norm(vec), 1e-9)
@@ -756,7 +862,7 @@ def _make_local_embedder():
     except ImportError:
         sys.exit("sentence-transformers not installed — run: pip install sentence-transformers")
 
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    model = SentenceTransformer(LOCAL_EMBED_MODEL)
 
     def embed(text: str) -> np.ndarray:
         vec = model.encode([text], normalize_embeddings=False)[0].astype(np.float32)

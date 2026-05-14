@@ -19,15 +19,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from retrieve import HybridRetriever, RetrieverConfig, RetrievalTrace
-
-PROMPTS_DIR        = Path(__file__).parent / "prompts"
-SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.md"
-CORPUS_DIR         = Path("edgar_corpus")
+from src.retrieval.retrieve import HybridRetriever, RetrieverConfig, RetrievalTrace
+from src.config import SYSTEM_PROMPT_PATH, CORPUS_DIR, OLLAMA_BASE_URL, OPENAI_BASE_URL
 
 DEFAULT_MODEL    = "gpt-5.4-mini"
-OLLAMA_BASE_URL  = "http://localhost:11434/v1"
-OPENAI_BASE_URL  = "https://api.openai.com/v1"
 OLLAMA_FALLBACK  = "llama3.2"
 
 
