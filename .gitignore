@@ -54,3 +54,4 @@ chroma_store/
 
 # Logs
 contextualize.log
+embed.log
