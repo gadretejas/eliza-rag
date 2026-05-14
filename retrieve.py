@@ -517,7 +517,7 @@ class HybridRetriever:
             "sections":     route.sections or None,
             "date_from":    route.date_from,
             "filing_type":  route.filing_type,
-            "text_only":    True,
+            "text_only":    False,
         }
 
         candidates: list[tuple[float, dict]] = []
