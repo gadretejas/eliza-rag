@@ -7,10 +7,23 @@ export interface Source {
   snippet: string;
 }
 
+export type Provider = "openai" | "anthropic" | "local";
+
+export interface SavedModel {
+  id: string;
+  provider: Provider;
+  apiKey: string;
+  modelName: string;
+  baseUrl: string;
+}
+
 export interface AskRequest {
   question: string;
   model: string;
   top_k: number;
+  provider?: Provider;
+  api_key?: string;
+  base_url?: string;
 }
 
 export interface AskResponse {

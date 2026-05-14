@@ -4,11 +4,7 @@
 
 @layer base {
   body {
-    @apply bg-slate-950 text-slate-100 font-sans antialiased;
-  }
-
-  * {
-    @apply border-slate-700;
+    @apply bg-white text-gray-900 font-sans antialiased;
   }
 
   ::-webkit-scrollbar {
@@ -16,10 +12,23 @@
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-slate-900;
+    @apply bg-gray-100;
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-slate-600 rounded-full;
+    @apply bg-gray-300 rounded-full;
   }
+}
+
+.dark body {
+  background-color: rgb(2 6 23);
+  color: rgb(241 245 249);
+}
+
+.dark ::-webkit-scrollbar-track {
+  background-color: rgb(15 23 42);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background-color: rgb(71 85 105);
 }

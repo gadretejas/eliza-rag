@@ -23,10 +23,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from typing import Literal
+
 class AskRequest(BaseModel):
     question: str
     model: str = "gpt-5.4-mini"
     top_k: int = 15
+    provider: Literal["openai", "anthropic", "local"] | None = None
+    api_key: str | None = None
+    base_url: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -35,14 +40,23 @@ class AskResponse(BaseModel):
 
 
 # Singleton engine — ChromaDB is opened once at first request and reused.
-# A new engine is only created when non-default model/top_k are requested.
+# Custom-keyed requests (user-supplied api_key) are never cached.
 _engines: dict[str, AnswerEngine] = {}
 
 
-def _get_engine(model: str, top_k: int) -> AnswerEngine:
-    key = f"{model}:{top_k}"
+def _get_engine(req: AskRequest) -> AnswerEngine:
+    if req.api_key:
+        # Never cache user-supplied keys
+        return AnswerEngine(AnswerConfig(
+            model=req.model, top_k=req.top_k,
+            provider=req.provider, api_key=req.api_key, base_url=req.base_url,
+        ))
+    key = f"{req.provider or 'openai'}:{req.model}:{req.top_k}"
     if key not in _engines:
-        _engines[key] = AnswerEngine(AnswerConfig(model=model, top_k=top_k))
+        _engines[key] = AnswerEngine(AnswerConfig(
+            model=req.model, top_k=req.top_k,
+            provider=req.provider, base_url=req.base_url,
+        ))
     return _engines[key]
 
 
@@ -51,7 +65,7 @@ async def ask(req: AskRequest) -> AskResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    engine = _get_engine(req.model, req.top_k)
+    engine = _get_engine(req)
     result = engine.answer(req.question)
 
     sources = [

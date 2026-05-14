@@ -11,16 +11,16 @@ export default function SourceList({ sources, activeIndex }: Props) {
 
   return (
     <section>
-      <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3">
-        Sources <span className="text-slate-700 font-normal normal-case tracking-normal">({sources.length})</span>
+      <h2 className="text-xs font-semibold uppercase tracking-widest mb-3
+                     text-gray-400 dark:text-slate-500">
+        Sources{" "}
+        <span className="font-normal normal-case tracking-normal text-gray-300 dark:text-slate-600">
+          ({sources.length})
+        </span>
       </h2>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-3">
         {sources.map((s) => (
-          <SourceCard
-            key={s.index}
-            source={s}
-            highlighted={activeIndex === s.index}
-          />
+          <SourceCard key={s.index} source={s} highlighted={activeIndex === s.index} />
         ))}
       </div>
     </section>

@@ -9,10 +9,10 @@ export default function CitationChip({ index, active, onClick }: Props) {
     <button
       onClick={onClick}
       className={`inline-flex items-center justify-center w-5 h-5 rounded text-xs font-semibold
-                  mx-0.5 align-middle transition-colors
+                  mx-0.5 align-middle transition-colors border
                   ${active
-                    ? "bg-blue-500 text-white"
-                    : "bg-slate-700 text-slate-300 hover:bg-blue-600 hover:text-white"
+                    ? "bg-pink-600 text-white border-transparent dark:bg-pink-500"
+                    : "bg-pink-50 text-pink-600 border-pink-200 hover:bg-pink-600 hover:text-white hover:border-transparent dark:bg-pink-950/40 dark:text-pink-400 dark:border-pink-800 dark:hover:bg-pink-500 dark:hover:text-white"
                   }`}
     >
       {index}

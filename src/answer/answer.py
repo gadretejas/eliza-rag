@@ -36,6 +36,10 @@ class AnswerConfig:
     top_k:           int   = 15
     max_chunk_chars: int   = 2000     # guards context overflow on smaller models
     retriever_config: RetrieverConfig = field(default_factory=RetrieverConfig)
+    # Custom provider fields (None → use env defaults)
+    provider:  str | None = None      # "openai" | "anthropic" | "local"
+    api_key:   str | None = None
+    base_url:  str | None = None
 
 
 # ── Data structures ────────────────────────────────────────────────────────────
@@ -66,40 +70,67 @@ class Answer:
 
 class LLMClient:
     """
-    Wraps openai.OpenAI. Routes to Ollama (local) or OpenAI based on the
-    model string prefix and environment.
+    Unified LLM client supporting OpenAI, Anthropic, and local Llama (via Ollama).
 
-    Model routing:
-        "ollama:<name>"   → Ollama at localhost:11434
-        any other string  → OpenAI (requires OPENAI_API_KEY); falls back to
-                            Ollama if the key is absent
+    Provider resolution order:
+        1. Explicit provider/api_key/base_url from AnswerConfig
+        2. Legacy "ollama:<name>" model prefix → local
+        3. OPENAI_API_KEY in environment → openai
+        4. Fallback to local Ollama
     """
 
-    def __init__(self, model: str) -> None:
-        try:
-            from openai import OpenAI
-        except ImportError:
-            sys.exit("openai not installed — run: pip install openai")
+    def __init__(self, config: "AnswerConfig") -> None:
+        model    = config.model
+        provider = config.provider
+        api_key  = config.api_key
+        base_url = config.base_url
 
-        if model.startswith("ollama:"):
-            self.model  = model[len("ollama:"):]
-            self._client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
-            self._backend = "ollama"
-        else:
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if not api_key:
+        # Legacy prefix support
+        if model.startswith("ollama:") and provider is None:
+            provider = "local"
+            model    = model[len("ollama:"):]
+
+        # Auto-detect provider when not explicitly set
+        if provider is None:
+            env_key = os.environ.get("OPENAI_API_KEY")
+            if env_key:
+                provider = "openai"
+                api_key  = api_key or env_key
+            else:
                 print(
                     f"Warning: OPENAI_API_KEY not set — "
-                    f"falling back to ollama:{OLLAMA_FALLBACK}",
+                    f"falling back to local Ollama ({OLLAMA_FALLBACK})",
                     file=sys.stderr,
                 )
-                self.model   = OLLAMA_FALLBACK
-                self._client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
-                self._backend = "ollama"
-            else:
-                self.model   = model
-                self._client = OpenAI(api_key=api_key)
-                self._backend = "openai"
+                provider = "local"
+                model    = OLLAMA_FALLBACK
+
+        self.model    = model
+        self._provider = provider
+
+        if provider == "anthropic":
+            try:
+                from anthropic import Anthropic
+            except ImportError:
+                sys.exit("anthropic not installed — run: pip install anthropic")
+            self._anthropic = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
+            self._openai    = None
+        else:
+            try:
+                from openai import OpenAI
+            except ImportError:
+                sys.exit("openai not installed — run: pip install openai")
+            if provider == "local":
+                self._openai = OpenAI(
+                    base_url=base_url or OLLAMA_BASE_URL,
+                    api_key="ollama",
+                )
+            else:  # openai
+                self._openai = OpenAI(
+                    api_key=api_key or os.environ.get("OPENAI_API_KEY"),
+                    **({"base_url": base_url} if base_url else {}),
+                )
+            self._anthropic = None
 
     def complete(
         self,
@@ -109,18 +140,28 @@ class LLMClient:
         max_tokens: int = 1024,
     ) -> str:
         try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                temperature=temperature,
-                max_completion_tokens=max_tokens,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": user},
-                ],
-            )
-            return response.choices[0].message.content or ""
+            if self._provider == "anthropic":
+                response = self._anthropic.messages.create(  # type: ignore[union-attr]
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                return response.content[0].text  # type: ignore[union-attr]
+            else:
+                response = self._openai.chat.completions.create(  # type: ignore[union-attr]
+                    model=self.model,
+                    temperature=temperature,
+                    max_completion_tokens=max_tokens,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user",   "content": user},
+                    ],
+                )
+                return response.choices[0].message.content or ""
         except Exception as e:
-            sys.exit(f"LLM call failed ({self._backend}/{self.model}): {e}")
+            sys.exit(f"LLM call failed ({self._provider}/{self.model}): {e}")
 
 
 # ── Prompt helpers ─────────────────────────────────────────────────────────────
@@ -276,7 +317,7 @@ class AnswerEngine:
 
     def _get_llm(self) -> LLMClient:
         if self._llm is None:
-            self._llm = LLMClient(self.config.model)
+            self._llm = LLMClient(self.config)
         return self._llm
 
     def _get_system_prompt(self) -> str:

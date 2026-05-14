@@ -17,7 +17,6 @@ const EXAMPLES = [
 export default function QueryBox({ value, onChange, onSubmit, loading }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-resize textarea
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -34,8 +33,11 @@ export default function QueryBox({ value, onChange, onSubmit, loading }: Props) 
 
   return (
     <div className="w-full">
-      <div className="relative flex items-end gap-3 bg-slate-900 border border-slate-700 rounded-xl p-3
-                      focus-within:border-blue-500 transition-colors">
+      <div className="relative flex items-end gap-3 p-3 rounded-xl shadow-sm transition-all
+                      bg-white dark:bg-slate-900
+                      border border-gray-200 dark:border-slate-700
+                      focus-within:border-pink-400 dark:focus-within:border-pink-500
+                      focus-within:ring-1 focus-within:ring-pink-400 dark:focus-within:ring-pink-500">
         <textarea
           ref={ref}
           value={value}
@@ -44,15 +46,21 @@ export default function QueryBox({ value, onChange, onSubmit, loading }: Props) 
           placeholder="Ask a question about SEC filings…"
           rows={1}
           disabled={loading}
-          className="flex-1 resize-none bg-transparent text-slate-100 placeholder-slate-500 text-base
-                     leading-relaxed focus:outline-none disabled:opacity-60 min-h-[40px] max-h-48 overflow-y-auto"
+          className="flex-1 resize-none bg-transparent text-base leading-relaxed
+                     focus:outline-none disabled:opacity-60 min-h-[40px] max-h-48 overflow-y-auto
+                     text-gray-900 dark:text-slate-100
+                     placeholder-gray-300 dark:placeholder-slate-600"
         />
         <button
           onClick={onSubmit}
           disabled={loading || !value.trim()}
-          className="flex-shrink-0 flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500
-                     disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium
-                     rounded-lg transition-colors"
+          className="flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg
+                     text-sm font-medium transition-all shadow-sm
+                     bg-gradient-to-r from-pink-500 to-purple-500
+                     hover:from-pink-600 hover:to-purple-600
+                     text-white
+                     disabled:from-gray-200 disabled:to-gray-200 disabled:text-gray-400
+                     dark:disabled:from-slate-700 dark:disabled:to-slate-700 dark:disabled:text-slate-500"
         >
           {loading ? (
             <span className="flex items-center gap-2">
@@ -62,7 +70,8 @@ export default function QueryBox({ value, onChange, onSubmit, loading }: Props) 
           ) : (
             <span className="flex items-center gap-1.5">
               Ask
-              <kbd className="hidden sm:inline-flex items-center text-xs opacity-60 font-mono bg-blue-700 px-1.5 py-0.5 rounded">
+              <kbd className="hidden sm:inline-flex items-center text-xs opacity-70 font-mono
+                              bg-white/20 px-1.5 py-0.5 rounded">
                 ⌘↵
               </kbd>
             </span>
@@ -70,15 +79,19 @@ export default function QueryBox({ value, onChange, onSubmit, loading }: Props) 
         </button>
       </div>
 
-      {/* Example questions — shown only when input is empty */}
       {!value && (
         <div className="mt-4 flex flex-wrap gap-2">
           {EXAMPLES.map((ex) => (
             <button
               key={ex}
               onClick={() => onChange(ex)}
-              className="text-xs text-slate-400 border border-slate-700 hover:border-slate-500
-                         hover:text-slate-300 rounded-full px-3 py-1.5 transition-colors"
+              className="text-xs rounded-full px-3 py-1.5 transition-colors
+                         bg-white dark:bg-slate-900
+                         border border-gray-200 dark:border-slate-700
+                         text-gray-500 dark:text-slate-400
+                         hover:border-pink-300 dark:hover:border-pink-700
+                         hover:text-pink-600 dark:hover:text-pink-400
+                         hover:bg-pink-50 dark:hover:bg-pink-950/30"
             >
               {ex}
             </button>
@@ -93,11 +106,7 @@ function Spinner() {
   return (
     <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-      />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
     </svg>
   );
 }
