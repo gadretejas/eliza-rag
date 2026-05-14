@@ -24,6 +24,9 @@ from datetime import date, timedelta
 from typing import Any, Literal
 
 import numpy as np
+from dotenv import load_dotenv
+
+load_dotenv()
 
 CHROMA_PATH     = "chroma_store"
 COLLECTION_NAME = "sec_filings"
@@ -48,7 +51,7 @@ class RetrieverConfig:
 
     # Re-ranking
     rerank: bool = True
-    reranker: Literal["local", "cohere", "none"] = "local"
+    reranker: Literal["local", "cohere", "none"] = "none"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     cohere_model:   str = "rerank-english-v3.0"
 
@@ -663,7 +666,7 @@ def main() -> None:
     parser.add_argument("question", help="Natural language question")
     parser.add_argument("--top-k",   type=int, default=15)
     parser.add_argument("--no-rerank", action="store_true")
-    parser.add_argument("--reranker", choices=["local", "cohere", "none"], default="local")
+    parser.add_argument("--reranker", choices=["local", "cohere", "none"], default="none")
     parser.add_argument("--trace",   action="store_true", help="Print routing + score info")
     args = parser.parse_args()
 
