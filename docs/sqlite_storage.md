@@ -114,11 +114,11 @@ CREATE INDEX IF NOT EXISTS idx_ticker_date ON chunks(ticker, filing_date);
 ## ID scheme
 
 ```python
-id = f"{source_file}__{chunk_index}"
-# e.g. "AAPL_10K_2024Q3_2024-11-01_full.txt__3"
+id = f"{source_file}__{section_id}__{chunk_index}"
+# e.g. "AAPL_10K_2024Q3_2024-11-01_full.txt__Item 1A__3"
 ```
 
-- Globally unique across the entire corpus
+- Globally unique across the entire corpus — `chunk_index` resets to 0 per section, so `section_id` is required to avoid collisions
 - Deterministic — re-running produces the same IDs
 - Human-readable — debuggable without a lookup table
 - Double underscore (`__`) separator avoids collision with single underscores in filenames

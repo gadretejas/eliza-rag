@@ -304,7 +304,7 @@ def write_to_db(
 ) -> None:
     rows = [
         (
-            f"{c['source_file']}__{c['chunk_index']}",
+            f"{c['source_file']}__{c['section_id']}__{c['chunk_index']}",
             c["source_file"],
             c["chunk_index"],
             c["ticker"],

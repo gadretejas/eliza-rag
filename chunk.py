@@ -292,10 +292,16 @@ def process_file(path: Path) -> Iterator[Chunk]:
 
     body = strip_toc(extract_body(raw))
 
+    # Global counter per section_id — a section header can appear multiple times
+    # (TOC, body, exhibits). enumerate() resets per occurrence; this does not.
+    section_chunk_counts: dict[str, int] = {}
+
     for section_id, section_name, section_text in split_into_sections(body):
-        for idx, (chunk_text, is_table) in enumerate(chunk_section(section_text)):
+        for chunk_text, is_table in chunk_section(section_text):
             if not chunk_text.strip():
                 continue
+            global_idx = section_chunk_counts.get(section_id, 0)
+            section_chunk_counts[section_id] = global_idx + 1
             yield Chunk(
                 text=chunk_text,
                 ticker=meta.get("ticker", ""),
@@ -308,7 +314,7 @@ def process_file(path: Path) -> Iterator[Chunk]:
                 section_id=section_id,
                 section_name=section_name,
                 content_type="table" if is_table else "text",
-                chunk_index=idx,
+                chunk_index=global_idx,
                 source_file=path.name,
             )
 

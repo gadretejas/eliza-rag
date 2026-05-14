@@ -423,7 +423,7 @@ def write_chunks_to_db(
         enriched_text = "\n\n".join(parts)
 
         rows.append((
-            f"{sf}__{c['chunk_index']}",   # id
+            f"{sf}__{c['section_id']}__{c['chunk_index']}",   # id
             sf,
             c["chunk_index"],
             c["ticker"],
