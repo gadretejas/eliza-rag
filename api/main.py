@@ -23,16 +23,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_engine: AnswerEngine | None = None
-
-
-def _get_engine() -> AnswerEngine:
-    global _engine
-    if _engine is None:
-        _engine = AnswerEngine(AnswerConfig())
-    return _engine
-
-
 class AskRequest(BaseModel):
     question: str
     model: str = "gpt-5.4-mini"
@@ -44,13 +34,24 @@ class AskResponse(BaseModel):
     sources: list[dict]
 
 
+# Singleton engine — ChromaDB is opened once at first request and reused.
+# A new engine is only created when non-default model/top_k are requested.
+_engines: dict[str, AnswerEngine] = {}
+
+
+def _get_engine(model: str, top_k: int) -> AnswerEngine:
+    key = f"{model}:{top_k}"
+    if key not in _engines:
+        _engines[key] = AnswerEngine(AnswerConfig(model=model, top_k=top_k))
+    return _engines[key]
+
+
 @app.post("/api/ask", response_model=AskResponse)
 async def ask(req: AskRequest) -> AskResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    config = AnswerConfig(model=req.model, top_k=req.top_k)
-    engine = AnswerEngine(config)
+    engine = _get_engine(req.model, req.top_k)
     result = engine.answer(req.question)
 
     sources = [
