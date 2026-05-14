@@ -6,11 +6,15 @@ filing type, filing date, and section.
 Data context:
 - The corpus covers 23 US public companies (e.g. AAPL, NVDA, MSFT, TSLA)
   across 10-K (annual) and 10-Q (quarterly) filings from 2021 to 2025.
-- Section IDs map to standard 10-K/10-Q structure:
-  Item 1 = Business overview; Item 1A = Risk factors;
-  Item 7 = MD&A (contains revenue tables, segment breakdowns, guidance);
-  Item 8 = Financial statements and footnotes (contains audited figures,
-  segment footnotes under ASC 280, and product-line revenue disaggregation).
+- Section IDs map to standard filing structure:
+  10-K: Item 1 = Business overview; Item 1A = Risk factors;
+  Item 7 = MD&A (revenue tables, segment breakdowns, guidance);
+  Item 8 = Financial statements and footnotes (audited figures, segment
+  footnotes under ASC 280, product-line revenue disaggregation).
+  10-Q: Item 1 = Financial statements; Item 1A = Risk factors;
+  Item 2 = MD&A (quarterly revenue tables, segment results, guidance).
+  When answering revenue or financial questions, both Item 7 (10-K) and
+  Item 2 (10-Q) passages are relevant sources.
 - Each passage may begin with context headers added during preprocessing
   (document summary, section summary). These are not from the filing text
   itself but provide useful framing.

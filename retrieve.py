@@ -133,7 +133,8 @@ _SECTION_SIGNALS: list[tuple[list[str], list[str]]] = [
          "vulnerability", "uncertainty", "hazard", "concern"],
     ),
     (
-        ["Item 7", "Item 8"],
+        # Item 7/8 = MD&A/financials in 10-K; Item 2/1 = same in 10-Q
+        ["Item 7", "Item 8", "Item 2"],
         ["revenue", "sales", "growth", "outlook", "guidance", "forecast",
          "performance", "results", "earnings", "profit", "income", "margin",
          "eps", "ebitda", "cash flow", "operating income", "net income",
@@ -151,7 +152,8 @@ _SECTION_SIGNALS: list[tuple[list[str], list[str]]] = [
          "overview", "business model", "competition", "industry"],
     ),
     (
-        ["Item 7"],
+        # Item 7 = MD&A in 10-K; Item 2 = MD&A in 10-Q
+        ["Item 7", "Item 2"],
         ["management", "mda", "discussion", "analysis", "liquidity",
          "capital allocation", "working capital", "strategy"],
     ),
@@ -179,6 +181,7 @@ class RouteResult:
     tickers:      list[str]
     sections:     list[str]
     date_from:    str | None    # ISO-8601 date string or None
+    date_to:      str | None    # ISO-8601 date string or None (None = open-ended)
     filing_type:  str | None    # "10-K" | "10-Q" | None
 
 
@@ -186,10 +189,12 @@ class QueryRouter:
     """Converts a natural-language question into structured retrieval filters."""
 
     def route(self, question: str) -> RouteResult:
+        date_from, date_to = self._extract_date_range(question)
         return RouteResult(
             tickers=self._extract_tickers(question),
             sections=self._extract_sections(question),
-            date_from=self._extract_date_from(question),
+            date_from=date_from,
+            date_to=date_to,
             filing_type=self._extract_filing_type(question),
         )
 
@@ -211,17 +216,28 @@ class QueryRouter:
                 sections.update(section_ids)
         return sorted(sections) if sections else list(_DEFAULT_SECTIONS)
 
-    def _extract_date_from(self, question: str) -> str | None:
+    def _extract_date_range(self, question: str) -> tuple[str | None, str | None]:
+        """Return (date_from, date_to) ISO strings. Both None if no temporal signal."""
         q = question.lower()
+
+        # Relative phrases → open-ended floor (date_from only, no ceiling)
         for pattern, days_back in _TEMPORAL_PATTERNS:
             if re.search(pattern, q):
                 d = date.today() - timedelta(days=days_back)
-                return d.isoformat()
-        # Explicit year mention: "in 2023", "since 2024"
+                return d.isoformat(), None
+
+        # Explicit year mention → closed window for that calendar year.
+        # "since YYYY" / "from YYYY" → floor only (no ceiling).
+        # "as of YYYY" / "in YYYY" / "fiscal YYYY" / bare year → full year window.
         m = re.search(r"\b(20\d{2})\b", q)
         if m:
-            return f"{m.group(1)}-01-01"
-        return None
+            year = m.group(1)
+            open_ended = bool(re.search(r"\b(since|from)\b", q))
+            date_from = f"{year}-01-01"
+            date_to   = None if open_ended else f"{year}-12-31"
+            return date_from, date_to
+
+        return None, None
 
     def _extract_filing_type(self, question: str) -> str | None:
         q = question.lower()
@@ -294,35 +310,47 @@ class VectorIndex:
         if where:
             kwargs["where"] = where
 
-        try:
-            r = self._collection.query(**kwargs)
-        except Exception:
+        # ChromaDB raises when n_results exceeds the number of items matching
+        # the where clause. Retry with halved n until it succeeds rather than
+        # returning [] and silently falling through to the no-filter fallback.
+        while n >= 1:
+            kwargs["n_results"] = n
+            try:
+                r = self._collection.query(**kwargs)
+                break
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "n_results" in msg or "number of elements" in msg or "brute" in msg:
+                    n = n // 2
+                else:
+                    return []
+        else:
             return []
 
         results = []
         for doc, meta, dist in zip(
             r["documents"][0], r["metadatas"][0], r["distances"][0]
         ):
-            score = 1.0 - dist          # cosine distance → similarity
+            score = 1.0 - dist
             chunk = {"text": doc, **meta}
             results.append((score, chunk))
 
         return results
 
     def _fallback_wheres(self, filters: dict[str, Any]):
-        """Yield progressively looser where clauses."""
-        full = self._build_where(filters)
-        yield full
+        """Yield progressively looser where clauses.
 
-        if filters.get("date_from"):
-            yield self._build_where({**filters, "date_from": None})
+        Date filtering is handled in Python post-retrieval, not here.
+        Level 1: ticker + section filter
+        Level 2: ticker only (drop section)
+        Level 3: no filter (last resort)
+        """
+        yield self._build_where(filters)
 
         if filters.get("sections"):
-            yield self._build_where(
-                {**filters, "sections": None, "date_from": None}
-            )
+            yield self._build_where({**filters, "sections": None})
 
-        yield None  # no filter at all
+        yield None
 
     @staticmethod
     def _build_where(filters: dict[str, Any]) -> dict | None:
@@ -336,9 +364,8 @@ class VectorIndex:
         if sections:
             conditions.append({"section_id": {"$in": sections}})
 
-        date_from = filters.get("date_from")
-        if date_from:
-            conditions.append({"filing_date": {"$gte": date_from}})
+        # NOTE: ChromaDB $gte/$lte only support numeric operands, not strings.
+        # Date filtering is handled in Python post-retrieval via _apply_date_filter.
 
         filing_type = filters.get("filing_type")
         if filing_type:
@@ -353,6 +380,68 @@ class VectorIndex:
         if len(conditions) == 1:
             return conditions[0]
         return {"$and": conditions}
+
+
+# ── Date filtering helpers ─────────────────────────────────────────────────────
+
+def _widen_date_window(filters: dict[str, Any], years: int) -> dict[str, Any]:
+    """Return a copy of filters with the date window expanded by ±N years."""
+    result = dict(filters)
+
+    if filters.get("date_from"):
+        try:
+            d = date.fromisoformat(filters["date_from"])
+            result["date_from"] = date(d.year - years, d.month, d.day).isoformat()
+        except (ValueError, OverflowError):
+            pass
+
+    if filters.get("date_to"):
+        try:
+            d = date.fromisoformat(filters["date_to"])
+            widened = date(d.year + years, d.month, d.day)
+            result["date_to"] = min(widened, date.today()).isoformat()
+        except (ValueError, OverflowError):
+            result["date_to"] = date.today().isoformat()
+
+    return result
+
+
+def _apply_date_filter(
+    candidates: list[tuple[float, dict]],
+    date_from:  str | None,
+    date_to:    str | None,
+) -> list[tuple[float, dict]]:
+    """Hard-filter candidates to the intended date window."""
+    if not date_from and not date_to:
+        return candidates
+    result = []
+    for score, chunk in candidates:
+        fd = chunk.get("filing_date", "")
+        if (not date_from or fd >= date_from) and (not date_to or fd <= date_to):
+            result.append((score, chunk))
+    return result
+
+
+def _apply_date_penalty(
+    candidates: list[tuple[float, dict]],
+    date_from:  str | None,
+    date_to:    str | None,
+    penalty:    float = 0.85,
+) -> list[tuple[float, dict]]:
+    """Discount chunks outside the intended date window without hard-excluding them."""
+    if not date_from and not date_to:
+        return candidates
+
+    result = []
+    for score, chunk in candidates:
+        fd = chunk.get("filing_date", "")
+        in_window = (
+            (not date_from or fd >= date_from) and
+            (not date_to   or fd <= date_to)
+        )
+        result.append((score * penalty if not in_window else score, chunk))
+
+    return sorted(result, key=lambda x: x[0], reverse=True)
 
 
 # ── Re-ranker ──────────────────────────────────────────────────────────────────
@@ -516,6 +605,7 @@ class HybridRetriever:
         base_filters = {
             "sections":     route.sections or None,
             "date_from":    route.date_from,
+            "date_to":      route.date_to,
             "filing_type":  route.filing_type,
             "text_only":    False,
         }
@@ -538,7 +628,26 @@ class HybridRetriever:
                 oversample_factor=cfg.oversample_factor,
             )
 
+        # Deduplicate by chunk id — same chunk can appear from multiple
+        # per-ticker fallback searches when filters are very loose.
+        seen: set[str] = set()
+        unique: list[tuple[float, dict]] = []
+        for score, chunk in candidates:
+            cid = chunk.get("id") or chunk.get("source_file", "") + str(chunk.get("chunk_index", ""))
+            if cid not in seen:
+                seen.add(cid)
+                unique.append((score, chunk))
+        candidates = unique
+
         n_candidates = len(candidates)
+
+        # ── date filtering (Python post-filter — ChromaDB $gte/$lte are numeric-only)
+        filtered = _apply_date_filter(candidates, route.date_from, route.date_to)
+        if len(filtered) >= max(1, cfg.top_k // 2):
+            candidates = filtered
+        else:
+            # Too few results in window — apply soft penalty instead of hard cut
+            candidates = _apply_date_penalty(candidates, route.date_from, route.date_to)
 
         # ── re-rank ───────────────────────────────────────────────────────────
         if cfg.rerank and cfg.reranker != "none":
@@ -683,7 +792,7 @@ def main() -> None:
         print(f"\n── Route ────────────────────────────────────")
         print(f"  Tickers   : {r.tickers or '(all)'}")
         print(f"  Sections  : {r.sections}")
-        print(f"  Date from : {r.date_from or '(none)'}")
+        print(f"  Date from : {r.date_from or '(none)'}  →  {r.date_to or '(open)'}")
         print(f"  Filing    : {r.filing_type or '(any)'}")
         print(f"  Candidates: {trace.n_candidates}")
         print(f"  Returned  : {len(trace.final_chunks)}")
