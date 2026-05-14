@@ -16,31 +16,35 @@ CLI smoke-test:
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 
-CHUNKS_PATH = Path("chunks.jsonl")
-INDEX_PATH  = Path("index.faiss")
+CHROMA_PATH     = "chroma_store"
+COLLECTION_NAME = "sec_filings"
+
+# Maps the short filing_type used by QueryRouter to the full stored value
+_FILING_TYPE_MAP = {
+    "10-K": "10-K (Annual Report)",
+    "10-Q": "10-Q (Quarterly Report)",
+}
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 @dataclass
 class RetrieverConfig:
-    chunks_path: Path = field(default_factory=lambda: CHUNKS_PATH)
-    index_path:  Path = field(default_factory=lambda: INDEX_PATH)
+    chroma_path:       str = CHROMA_PATH
+    chroma_collection: str = COLLECTION_NAME
 
     # Vector search
-    candidates_per_company: int = 20   # ANN candidates retrieved per ticker
-    candidates_global: int = 60        # candidates when no ticker filter
-    oversample_factor:  int = 8        # multiply top_k before metadata post-filter
+    candidates_per_company: int = 20
+    candidates_global: int = 60
+    oversample_factor:  int = 8
 
     # Re-ranking
     rerank: bool = True
@@ -50,7 +54,6 @@ class RetrieverConfig:
 
     # Final selection
     top_k: int = 15
-    # min_per_company: None = auto-compute as max(2, top_k // n_companies)
     min_per_company: int | None = None
 
 
@@ -230,34 +233,24 @@ class QueryRouter:
 
 class VectorIndex:
     """
-    Wraps a FAISS IndexFlatIP.
-    Chunks are loaded into memory on init for fast metadata post-filtering.
+    Wraps a ChromaDB collection.
+    Metadata filtering happens inside the DB; three-level fallback mirrors
+    the previous FAISS post-filter approach.
     """
 
-    def __init__(self, chunks_path: Path, index_path: Path) -> None:
+    def __init__(self, chroma_path: str, collection_name: str) -> None:
         try:
-            import faiss
+            import chromadb
         except ImportError:
-            sys.exit("faiss-cpu not installed — run: pip install faiss-cpu")
+            sys.exit("chromadb not installed — run: pip install chromadb")
 
-        if not index_path.exists():
+        client = chromadb.PersistentClient(path=chroma_path)
+        try:
+            self._collection = client.get_collection(collection_name)
+        except Exception:
             sys.exit(
-                f"{index_path} not found — run embed.py first to build the index."
-            )
-        if not chunks_path.exists():
-            sys.exit(f"{chunks_path} not found — run chunk.py first.")
-
-        self._faiss = faiss.read_index(str(index_path))
-
-        self._chunks: list[dict[str, Any]] = []
-        with chunks_path.open(encoding="utf-8") as f:
-            for line in f:
-                self._chunks.append(json.loads(line))
-
-        if self._faiss.ntotal != len(self._chunks):
-            raise ValueError(
-                f"Index has {self._faiss.ntotal} vectors but "
-                f"{len(self._chunks)} chunks — rebuild with embed.py."
+                f"ChromaDB collection '{collection_name}' not found in {chroma_path}/ — "
+                "run embed.py first."
             )
 
     def search(
@@ -267,67 +260,96 @@ class VectorIndex:
         top_k: int,
         oversample_factor: int = 8,
     ) -> list[tuple[float, dict]]:
-        """
-        Return up to top_k (score, chunk) pairs matching filters.
-        Performs ANN search on top_k * oversample_factor candidates then
-        post-filters by metadata.  Falls back gracefully if filters are too
-        strict (relaxes date first, then section).
-        """
-        n_search = min(top_k * oversample_factor, self._faiss.ntotal)
-        qv = query_vec.reshape(1, -1).astype(np.float32)
+        n_results = top_k * oversample_factor
 
-        scores, indices = self._faiss.search(qv, n_search)
+        # Three-level fallback: full filters → relax date → relax section+date
+        for where in self._fallback_wheres(filters):
+            results = self._query(query_vec, where, n_results)
+            if len(results) >= max(1, top_k // 2):
+                return results[:top_k]
 
-        results = self._apply_filters(scores[0], indices[0], filters, top_k)
-
-        # Fallback 1: relax date filter
-        if len(results) < max(1, top_k // 2) and filters.get("date_from"):
-            relaxed = {**filters, "date_from": None}
-            results = self._apply_filters(scores[0], indices[0], relaxed, top_k)
-
-        # Fallback 2: relax section filter
-        if len(results) < max(1, top_k // 2) and filters.get("sections"):
-            relaxed = {**filters, "sections": None, "date_from": None}
-            results = self._apply_filters(scores[0], indices[0], relaxed, top_k)
-
-        return results
+        return results[:top_k]
 
     # ── helpers ────────────────────────────────────────────────────────────────
 
-    def _apply_filters(
+    def _query(
         self,
-        scores: np.ndarray,
-        indices: np.ndarray,
-        filters: dict[str, Any],
-        top_k: int,
+        query_vec: np.ndarray,
+        where: dict | None,
+        n_results: int,
     ) -> list[tuple[float, dict]]:
-        results: list[tuple[float, dict]] = []
-        for score, idx in zip(scores, indices):
-            if idx < 0:
-                continue
-            chunk = self._chunks[int(idx)]
-            if self._matches(chunk, filters):
-                results.append((float(score), chunk))
-                if len(results) >= top_k:
-                    break
+        total = self._collection.count()
+        if total == 0:
+            return []
+
+        n = min(n_results, total)
+        kwargs: dict[str, Any] = {
+            "query_embeddings": [query_vec.tolist()],
+            "n_results":        n,
+            "include":          ["documents", "metadatas", "distances"],
+        }
+        if where:
+            kwargs["where"] = where
+
+        try:
+            r = self._collection.query(**kwargs)
+        except Exception:
+            return []
+
+        results = []
+        for doc, meta, dist in zip(
+            r["documents"][0], r["metadatas"][0], r["distances"][0]
+        ):
+            score = 1.0 - dist          # cosine distance → similarity
+            chunk = {"text": doc, **meta}
+            results.append((score, chunk))
+
         return results
 
+    def _fallback_wheres(self, filters: dict[str, Any]):
+        """Yield progressively looser where clauses."""
+        full = self._build_where(filters)
+        yield full
+
+        if filters.get("date_from"):
+            yield self._build_where({**filters, "date_from": None})
+
+        if filters.get("sections"):
+            yield self._build_where(
+                {**filters, "sections": None, "date_from": None}
+            )
+
+        yield None  # no filter at all
+
     @staticmethod
-    def _matches(chunk: dict, filters: dict[str, Any]) -> bool:
-        if filters.get("tickers") and chunk["ticker"] not in filters["tickers"]:
-            return False
-        if filters.get("sections") and chunk["section_id"] not in filters["sections"]:
-            return False
-        if filters.get("date_from") and chunk["filing_date"] < filters["date_from"]:
-            return False
-        if filters.get("filing_type"):
-            ft = filters["filing_type"]
-            if not chunk["filing_type"].startswith(ft):
-                return False
-        # Skip table chunks by default to keep context cleaner
-        if filters.get("text_only") and chunk["content_type"] == "table":
-            return False
-        return True
+    def _build_where(filters: dict[str, Any]) -> dict | None:
+        conditions = []
+
+        tickers = filters.get("tickers")
+        if tickers:
+            conditions.append({"ticker": {"$in": tickers}})
+
+        sections = filters.get("sections")
+        if sections:
+            conditions.append({"section_id": {"$in": sections}})
+
+        date_from = filters.get("date_from")
+        if date_from:
+            conditions.append({"filing_date": {"$gte": date_from}})
+
+        filing_type = filters.get("filing_type")
+        if filing_type:
+            full = _FILING_TYPE_MAP.get(filing_type, filing_type)
+            conditions.append({"filing_type": {"$eq": full}})
+
+        if filters.get("text_only"):
+            conditions.append({"content_type": {"$eq": "text"}})
+
+        if not conditions:
+            return None
+        if len(conditions) == 1:
+            return conditions[0]
+        return {"$and": conditions}
 
 
 # ── Re-ranker ──────────────────────────────────────────────────────────────────
@@ -549,7 +571,10 @@ class HybridRetriever:
 
     def _get_index(self) -> VectorIndex:
         if self._index is None:
-            self._index = VectorIndex(self.config.chunks_path, self.config.index_path)
+            self._index = VectorIndex(
+                self.config.chroma_path,
+                self.config.chroma_collection,
+            )
         return self._index
 
     def _get_reranker(self) -> Reranker:
@@ -563,30 +588,34 @@ class HybridRetriever:
 
     def _embed(self, text: str) -> np.ndarray:
         if self._embedder is None:
-            self._embedder = _load_embedder()
+            self._embedder = _load_embedder(
+                self.config.chroma_path, self.config.chroma_collection
+            )
         return self._embedder(text)
 
 
 # ── Embedder factory ───────────────────────────────────────────────────────────
 
-def _load_embedder():
+def _load_embedder(
+    chroma_path: str = CHROMA_PATH,
+    collection_name: str = COLLECTION_NAME,
+):
     """
-    Auto-detect the embedding backend from the FAISS index dimension.
+    Auto-detect the embedding backend from ChromaDB collection metadata.
     Falls back to local model if OPENAI_API_KEY is not set.
     """
+    model_name = None
     try:
-        import faiss
-        if not INDEX_PATH.exists():
-            raise FileNotFoundError
-        idx = faiss.read_index(str(INDEX_PATH))
-        dim = idx.d
+        import chromadb
+        client     = chromadb.PersistentClient(path=chroma_path)
+        collection = client.get_collection(collection_name)
+        model_name = (collection.metadata or {}).get("embedding_model")
     except Exception:
-        dim = None
+        pass
 
-    if dim == 1536 and os.environ.get("OPENAI_API_KEY"):
+    if model_name == "openai" and os.environ.get("OPENAI_API_KEY"):
         return _make_openai_embedder()
-    else:
-        return _make_local_embedder()
+    return _make_local_embedder()
 
 
 def _make_openai_embedder():

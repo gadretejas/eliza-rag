@@ -1,0 +1,19 @@
+# Optional — only needed to run ChromaDB as a networked service for production.
+# For local development, embed.py and retrieve.py use PersistentClient (no Docker required).
+#
+# To start:  docker compose up -d
+# To stop:   docker compose down
+
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_store:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+      - ALLOW_RESET=true        # remove before production
+
+volumes:
+  chroma_store:

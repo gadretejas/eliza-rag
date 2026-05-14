@@ -28,6 +28,9 @@ ENV/
 # Full corpus DB — may exceed GitHub's 100 MB limit; revisit after full run
 contextualized_chunks.db
 
+# ChromaDB local persistent data
+chroma_store/
+
 # Environment variables
 .env
 .env.local

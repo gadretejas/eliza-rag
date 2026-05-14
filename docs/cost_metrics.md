@@ -41,6 +41,23 @@ The full corpus estimate is extrapolated directly from the measured $0.04 test c
 
 Full analysis and model comparison in [embedding_models.md](embedding_models.md).
 
+### OpenAI model selection: `text-embedding-3-small` vs `text-embedding-3-large`
+
+| | `text-embedding-3-small` | `text-embedding-3-large` |
+|---|---|---|
+| Price | $0.020 / 1M tokens | $0.130 / 1M tokens |
+| Dimensions | 1536 | 3072 |
+| Cost for this corpus (~20M tokens) | **~$0.40** | **~$2.60** |
+| MTEB retrieval score | Good | Better |
+
+**Decision: use `text-embedding-3-small`.**
+
+Reasons:
+- 6.5× cheaper with marginal real-world quality difference for this use case
+- SEC filings are structured and keyword-rich — the enriched context added by `contextualize.py` already closes most of the semantic gap between the two models
+- Leaves budget for re-runs and runtime query embeddings within a $10 OpenAI credit
+- `large` is worth revisiting only if retrieval quality proves insufficient after evaluation
+
 ---
 
 ## Answer generation (`answer.py`)

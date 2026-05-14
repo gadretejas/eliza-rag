@@ -6,8 +6,8 @@ numpy>=1.24
 anthropic>=0.40
 python-dotenv>=1.0
 
-# Vector store (ChromaDB migration)
-# chromadb>=0.6
+# Vector store
+chromadb>=0.6
 
 # Optional re-rankers (uncomment as needed)
 # cohere>=5.0
