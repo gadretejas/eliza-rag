@@ -27,12 +27,14 @@ from api.history import (
 )
 from api.sessions import init_sessions_db, router as sessions_router
 from api.document import router as document_router
+from api.token_usage import init_token_usage_db, log_token_usage, get_usage_stats
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
-init_db()           # creates users table and seeds default admin on first boot
-init_history_db()   # creates conversations table
-init_sessions_db()  # creates sessions + session_messages tables
+init_db()             # creates users table and seeds default admin on first boot
+init_history_db()     # creates conversations table
+init_sessions_db()    # creates sessions + session_messages tables
+init_token_usage_db() # creates token_usage table
 
 app = FastAPI(title="SEC EDGAR RAG API", version="2.0.0")
 
@@ -94,6 +96,10 @@ def admin_delete_user(
 ) -> dict:
     delete_user(user_id)
     return {"ok": True}
+
+@admin_router.get("/token-usage")
+def admin_token_usage(_: TokenClaims = Depends(require_admin)) -> dict:
+    return get_usage_stats()
 
 app.include_router(admin_router)
 app.include_router(history_router)
@@ -189,6 +195,17 @@ async def ask(
             sources  = json.dumps(sources),
         )
 
+    # ── Log token usage ────────────────────────────────────────────────────────
+    from api.token_count import count_tokens
+    log_token_usage(
+        user_id           = user.user_id,
+        user_email        = user.email,
+        model             = req.model,
+        endpoint          = "ask",
+        prompt_tokens     = count_tokens(req.question, req.model),
+        completion_tokens = count_tokens(result.answer_text, req.model),
+    )
+
     return AskResponse(answer=result.answer_text, sources=sources)
 
 
@@ -249,6 +266,16 @@ async def ask_stream(
                         sources  = json.dumps(accumulated_sources),
                     )
                     yield f"data: {json.dumps({'type': 'saved', 'conv_id': conv_id})}\n\n"
+                    # ── Log token usage ────────────────────────────────────────
+                    from api.token_count import count_tokens
+                    log_token_usage(
+                        user_id           = user.user_id,
+                        user_email        = user.email,
+                        model             = req.model,
+                        endpoint          = "ask/stream",
+                        prompt_tokens     = count_tokens(req.question, req.model),
+                        completion_tokens = count_tokens(answer_text, req.model),
+                    )
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(

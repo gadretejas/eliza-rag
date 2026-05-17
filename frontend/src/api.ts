@@ -140,6 +140,12 @@ export async function adminDeleteUser(userId: number): Promise<void> {
   if (!res.ok) throw new Error(`Failed to delete user (${res.status})`);
 }
 
+export async function adminGetTokenUsage(): Promise<UsageStats> {
+  const res = await fetch("/admin/token-usage", { headers: authHeaders() });
+  if (!res.ok) throw new Error(`Failed to load usage stats (${res.status})`);
+  return res.json();
+}
+
 // ── History API ───────────────────────────────────────────────────────────────
 
 export async function getHistory(
@@ -207,7 +213,7 @@ export interface FollowUpCallbacks {
   onError:      (detail: string) => void;
 }
 
-import type { Source } from "./types";
+import type { Source, UsageStats } from "./types";
 
 export async function sendFollowUp(
   sessionId: number,

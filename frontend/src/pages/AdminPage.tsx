@@ -1,8 +1,9 @@
 import { useState, useEffect, type FormEvent } from "react";
 import {
   adminListUsers, adminCreateUser, adminUpdateUser, adminDeleteUser,
+  adminGetTokenUsage,
 } from "../api";
-import type { AdminUser, Role } from "../types";
+import type { AdminUser, Role, UsageStats } from "../types";
 
 const ROLES: Role[] = ["admin", "analyst", "viewer"];
 
@@ -12,13 +13,153 @@ const ROLE_BADGE: Record<Role, string> = {
   viewer:  "bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-slate-400",
 };
 
-export default function AdminPage() {
+// ── Token formatting ──────────────────────────────────────────────────────────
+
+function fmtTokens(n: number): string {
+  if (n === 0)        return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} M`;
+  if (n >= 1_000)     return `${Math.round(n / 1_000)} K`;
+  return n.toLocaleString();
+}
+
+// ── Dashboard tab ─────────────────────────────────────────────────────────────
+
+function DashboardTab() {
+  const [stats,        setStats]        = useState<UsageStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError,   setStatsError]   = useState<string | null>(null);
+
+  useEffect(() => {
+    setStatsLoading(true);
+    adminGetTokenUsage()
+      .then(setStats)
+      .catch((e) => setStatsError(e instanceof Error ? e.message : "Failed to load stats"))
+      .finally(() => setStatsLoading(false));
+  }, []);
+
+  if (statsLoading) {
+    return <div className="text-sm text-gray-400 dark:text-slate-500 mt-6">Loading…</div>;
+  }
+
+  if (statsError) {
+    return (
+      <div className="mt-6 px-3 py-2 rounded-lg text-sm bg-red-50 border border-red-200
+                      text-red-600 dark:bg-red-950/50 dark:border-red-800 dark:text-red-400">
+        {statsError}
+      </div>
+    );
+  }
+
+  if (!stats) return null;
+
+  const { users, models, grand_total, total_calls } = stats;
+  const uniqueUsers = users.length;
+
+  return (
+    <div className="mt-6 flex flex-col gap-6">
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-3 gap-4">
+        {[
+          { label: "Total tokens",  value: fmtTokens(grand_total) },
+          { label: "Total calls",   value: total_calls.toLocaleString() },
+          { label: "Active users",  value: uniqueUsers.toLocaleString() },
+        ].map(({ label, value }) => (
+          <div
+            key={label}
+            className="rounded-xl border border-gray-200 dark:border-slate-700
+                       bg-white dark:bg-slate-950 px-5 py-4"
+          >
+            <p className="text-2xl font-semibold text-gray-900 dark:text-slate-100">
+              {value}
+            </p>
+            <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Usage table */}
+      {users.length === 0 ? (
+        <p className="text-sm text-gray-400 dark:text-slate-500">
+          No usage recorded yet. Token counts will appear here once queries are made.
+        </p>
+      ) : (
+        <div className="rounded-xl border border-gray-200 dark:border-slate-700 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-slate-900 text-xs font-medium
+                              text-gray-500 dark:text-slate-400 uppercase tracking-wide">
+              <tr>
+                <th className="px-4 py-3 text-left">User</th>
+                <th className="px-4 py-3 text-right">Calls</th>
+                {models.map((m) => (
+                  <th key={m} className="px-4 py-3 text-right font-mono normal-case tracking-normal">
+                    {m}
+                  </th>
+                ))}
+                <th className="px-4 py-3 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
+              {users.map((u) => (
+                <tr key={u.user_id}
+                    className="bg-white dark:bg-slate-950 hover:bg-gray-50 dark:hover:bg-slate-900
+                               transition-colors">
+                  <td className="px-4 py-3 text-gray-800 dark:text-slate-200 font-medium">
+                    {u.email}
+                  </td>
+                  <td className="px-4 py-3 text-right text-gray-500 dark:text-slate-400">
+                    {u.call_count.toLocaleString()}
+                  </td>
+                  {models.map((m) => (
+                    <td key={m}
+                        className="px-4 py-3 text-right font-mono text-gray-600 dark:text-slate-400">
+                      {fmtTokens(u.by_model[m] ?? 0)}
+                    </td>
+                  ))}
+                  <td className="px-4 py-3 text-right font-semibold text-gray-800 dark:text-slate-200">
+                    {fmtTokens(u.total)}
+                  </td>
+                </tr>
+              ))}
+
+              {/* Totals row */}
+              <tr className="bg-gray-50 dark:bg-slate-900 border-t-2 border-gray-200 dark:border-slate-700">
+                <td className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wide">
+                  Total
+                </td>
+                <td className="px-4 py-3 text-right text-gray-500 dark:text-slate-400 font-semibold">
+                  {total_calls.toLocaleString()}
+                </td>
+                {models.map((m) => {
+                  const modelTotal = users.reduce((s, u) => s + (u.by_model[m] ?? 0), 0);
+                  return (
+                    <td key={m}
+                        className="px-4 py-3 text-right font-mono font-semibold
+                                   text-gray-700 dark:text-slate-300">
+                      {fmtTokens(modelTotal)}
+                    </td>
+                  );
+                })}
+                <td className="px-4 py-3 text-right font-bold text-gray-900 dark:text-slate-100">
+                  {fmtTokens(grand_total)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Users tab ─────────────────────────────────────────────────────────────────
+
+function UsersTab() {
   const [users,   setUsers]   = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
 
-  // New user form state
   const [newEmail,    setNewEmail]    = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole,     setNewRole]     = useState<Role>("viewer");
@@ -89,12 +230,12 @@ export default function AdminPage() {
   }
 
   return (
-    <main className="max-w-4xl mx-auto px-4 py-10">
+    <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900 dark:text-slate-100">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">
             User Management
-          </h1>
+          </h2>
           <p className="text-sm text-gray-400 dark:text-slate-500 mt-0.5">
             Manage accounts, roles, and corpus access.
           </p>
@@ -251,6 +392,54 @@ export default function AdminPage() {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
+type Tab = "users" | "dashboard";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "users",     label: "Users" },
+  { id: "dashboard", label: "Dashboard" },
+];
+
+export default function AdminPage() {
+  const [tab, setTab] = useState<Tab>("users");
+
+  return (
+    <main className="max-w-4xl mx-auto px-4 py-10">
+      {/* Page heading */}
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-slate-100">
+          Admin
+        </h1>
+        <p className="text-sm text-gray-400 dark:text-slate-500 mt-0.5">
+          Manage users and monitor token usage.
+        </p>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex gap-1 p-1 rounded-xl bg-gray-100 dark:bg-slate-800
+                      w-fit mb-6">
+        {TABS.map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors
+                        ${tab === id
+                          ? "bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100 shadow-sm"
+                          : "text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-300"
+                        }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "users"     && <UsersTab />}
+      {tab === "dashboard" && <DashboardTab />}
     </main>
   );
 }

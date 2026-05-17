@@ -377,12 +377,22 @@ async def send_message(
             if event is None:
                 # Save user message + assistant reply to DB
                 from api.token_count import count_tokens
+                from api.token_usage import log_token_usage
                 q_tokens = count_tokens(req.question, session.model)
                 answer_text = "".join(accumulated_text)
                 a_tokens    = count_tokens(answer_text, session.model)
                 append_message(session_id, "user",      req.question, "[]", q_tokens)
                 append_message(session_id, "assistant", answer_text,
                                json.dumps(accumulated_sources), a_tokens)
+                # Log token usage for the admin dashboard
+                log_token_usage(
+                    user_id           = user.user_id,
+                    user_email        = user.email,
+                    model             = session.model,
+                    endpoint          = "session/message",
+                    prompt_tokens     = q_tokens,
+                    completion_tokens = a_tokens,
+                )
                 break
             if event["type"] == "chunk":
                 accumulated_text.append(event.get("text", ""))

@@ -88,6 +88,23 @@ export interface ChatSessionDetail {
   context_limit: number;
 }
 
+// ── Admin Dashboard ───────────────────────────────────────────────────────────
+
+export interface UserUsage {
+  user_id:    number;
+  email:      string;
+  total:      number;
+  by_model:   Record<string, number>;
+  call_count: number;
+}
+
+export interface UsageStats {
+  users:       UserUsage[];
+  models:      string[];
+  grand_total: number;
+  total_calls: number;
+}
+
 // ── Chat History ──────────────────────────────────────────────────────────────
 
 export interface ConversationSummary {
