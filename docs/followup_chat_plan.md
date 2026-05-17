@@ -1,5 +1,11 @@
 # Follow-up Chat — Design & Implementation Plan
 
+## Status: Implemented
+
+This feature is fully implemented. `api/sessions.py`, `api/token_count.py`, `ContextBar.tsx`, `FollowUpButton.tsx`, and `ChatSession.tsx` are all live. Note: the `ChatSession` type exported from `types.ts` is named `ChatSessionDetail` (not `ChatSession`) to avoid a naming conflict with the component. The `followup_stream()` signature in `src/answer/answer.py` takes `tokens_so_far` and `context_limit` as additional parameters (defaulting to 0 and 128_000) so the session endpoint can pass the accumulated token count from DB.
+
+---
+
 ## Overview
 
 After receiving a single-turn Q&A answer, the user can click **"Follow up"** to enter a

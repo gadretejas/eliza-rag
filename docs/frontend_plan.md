@@ -1,3 +1,9 @@
+## Status: Implemented
+
+The frontend described in this plan has been built and significantly extended beyond the original scope. The light Eliza-style theme (see `docs/design.md`) replaced the dark theme. Additional components and pages were added: `CitationPanel.tsx` (right-side slide-in citation panel), `SourceFooter.tsx` (compact source display replacing always-visible source cards), `FollowUpButton.tsx`, `ChatSession.tsx` (multi-turn follow-up interface), `ContextBar.tsx` (token usage progress bar), `Sidebar.tsx` (navigation), `SettingsPage.tsx` (custom LLM endpoint), `ThemeToggle.tsx`, `ProtectedRoute.tsx`, and `AboutDataPage.tsx`. Pages are in `frontend/src/pages/`: `LoginPage.tsx`, `HistoryPage.tsx`, `AdminPage.tsx`. Auth is required for all query endpoints (JWT). The API contract below is the original plan; current endpoints and types are in `frontend/src/api.ts` and `frontend/src/types.ts`.
+
+---
+
 # Frontend Plan — SEC EDGAR RAG
 
 ## Tech Stack

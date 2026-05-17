@@ -1,5 +1,11 @@
 # ChromaDB Migration Plan
 
+## Status: Implemented
+
+The migration is complete. `src/pipeline/embed.py` writes to ChromaDB, `src/retrieval/retrieve.py` uses a ChromaDB-backed `VectorIndex`, and `index.faiss` / `chunks_path` have been removed from `RetrieverConfig`. The actual implementation uses `chromadb.PersistentClient(path=CHROMA_PATH)` (the embedded client) rather than the HTTP Docker service described in Phase 1 — this is a simpler deployment that avoids the Docker dependency while keeping the same ChromaDB API. The `docker-compose.yml` was not created. Date filtering is applied in Python post-retrieval rather than via ChromaDB `$gte/$lte` operators because ChromaDB's `where` clause only supports numeric comparisons, and filing dates are stored as ISO-8601 strings.
+
+---
+
 ## Why migrate
 
 The current FAISS implementation stores vectors in `index.faiss` and metadata/text in `chunks.jsonl` as two separate files that must stay in sync manually. This is the fundamental limitation:
@@ -323,16 +329,16 @@ Run the same questions against both FAISS (if still available) and ChromaDB and 
 
 ```bash
 # Test 1 — single company, section filter
-python3 retrieve.py "What are Apple's biggest risk factors?" --trace
+python -m src.retrieval.retrieve "What are Apple's biggest risk factors?" --trace
 
 # Test 2 — multi-company comparison
-python3 retrieve.py "Compare Apple and Microsoft revenue growth" --trace
+python -m src.retrieval.retrieve "Compare Apple and Microsoft revenue growth" --trace
 
 # Test 3 — temporal filter
-python3 retrieve.py "What risks did NVDA face in 2023?" --trace
+python -m src.retrieval.retrieve "What risks did NVDA face in 2023?" --trace
 
 # Test 4 — filing type filter
-python3 retrieve.py "Apple annual report business overview" --trace
+python -m src.retrieval.retrieve "Apple annual report business overview" --trace
 ```
 
 For each test verify:
@@ -344,7 +350,7 @@ For each test verify:
 ### 4.3 — End-to-end answer test
 
 ```bash
-python3 answer.py "What are NVDA's primary risk factors?" --model ollama:llama3.2 --trace
+python -m src.answer.answer "What are NVDA's primary risk factors?" --model ollama:llama3.2 --trace
 ```
 
 Verify:
@@ -357,11 +363,12 @@ Verify:
 Verify that `upsert` works correctly — re-running `embed.py` on the same corpus should not duplicate chunks:
 
 ```bash
-python3 embed.py --model local
-python3 -c "
+python -m src.pipeline.embed --model local
+python -c "
 import chromadb
-c = chromadb.HttpClient(host='localhost', port=8000)
-print(c.get_collection('sec_filings').count())   # must still be 50,676
+from src.config import CHROMA_PATH, COLLECTION_NAME
+c = chromadb.PersistentClient(path=CHROMA_PATH)
+print(c.get_collection(COLLECTION_NAME).count())   # must still be 50,676
 "
 ```
 

@@ -184,30 +184,31 @@ Keeping raw `text` and enriched `document` separate means:
 
 ---
 
-## New script: `contextualize.py`
+## Script: `src/pipeline/contextualize.py`
 
 Sits between `chunk.py` and `embed.py` in the pipeline:
 
 ```
-chunk.py → chunks.jsonl → contextualize.py → contexts_cache.json
-                                            → contextualized_chunks.db → embed.py → ChromaDB
+src/pipeline/chunk.py → chunks.jsonl → src/pipeline/contextualize.py → contexts_cache.json
+                                                                      → contextualized_chunks.db
+                                                                      → src/pipeline/embed.py → ChromaDB
 ```
 
 ### Interface
 
 ```bash
 # Generate all contexts (default: gpt-5.4-mini, resumes automatically)
-python3 contextualize.py
+python -m src.pipeline.contextualize
 
 # Use a different model
-python3 contextualize.py --model gpt-5.4
-python3 contextualize.py --model ollama:llama3.2
+python -m src.pipeline.contextualize --model gpt-5.4
+python -m src.pipeline.contextualize --model ollama:llama3.2
 
 # Force a clean restart (ignore existing cache)
-python3 contextualize.py --fresh
+python -m src.pipeline.contextualize --fresh
 
 # Custom output path
-python3 contextualize.py --output data/my_chunks.db
+python -m src.pipeline.contextualize --output data/my_chunks.db
 ```
 
 ### Key behaviours
@@ -220,7 +221,7 @@ python3 contextualize.py --output data/my_chunks.db
 
 **Input truncation** — only the first 3,000 characters of each document/section are sent to the LLM. Beyond that, the context window would be wasted on boilerplate. 3,000 chars ≈ 750 tokens — well within all supported models.
 
-**`embed.py` integration** — after the ChromaDB migration, `embed.py` will read enriched chunks directly from `contextualized_chunks.db` using the `enriched_text` field. Until then it reads `chunks.jsonl` and embeds raw text.
+**`embed.py` integration** — `src/pipeline/embed.py` reads enriched chunks from `contextualized_chunks.db` using the `enriched_text` field. It falls back to `chunks.jsonl` (raw text) if the DB is absent.
 
 ---
 
@@ -270,12 +271,11 @@ Use `gpt-5.4-mini` at **$3.29** — the lowest one-time cost with the highest co
 
 | Script | Role |
 |---|---|
-| `chunk.py` | Outputs `chunks.jsonl` — unchanged |
-| `contextualize.py` | Reads `chunks.jsonl`, generates contexts via LLM, writes `contexts_cache.json` + `contextualized_chunks.db` |
-| `query_db.py` | Inspect and verify `contextualized_chunks.db` — summary, ticker/section browse, keyword search |
-| `embed.py` | Reads `chunks.jsonl` today; will read `contextualized_chunks.db` after ChromaDB migration |
-| `retrieve.py` | Passes raw `text` to reranker and answer step — not enriched preamble |
-| `answer.py` | None — already uses `chunk["text"]` |
+| `src/pipeline/chunk.py` | Outputs `chunks.jsonl` |
+| `src/pipeline/contextualize.py` | Reads `chunks.jsonl`, generates contexts via LLM, writes `contexts_cache.json` + `contextualized_chunks.db` |
+| `src/pipeline/embed.py` | Reads `contextualized_chunks.db` (falls back to `chunks.jsonl`), writes to ChromaDB |
+| `src/retrieval/retrieve.py` | Queries ChromaDB; passes raw `text` to reranker and answer step — not enriched preamble |
+| `src/answer/answer.py` | Uses `chunk["text"]` from retriever output |
 
 ---
 

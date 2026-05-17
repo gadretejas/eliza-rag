@@ -1,5 +1,11 @@
 # Streaming Answer Generation Plan
 
+## Status: Implemented
+
+This feature is fully implemented. The `POST /api/ask/stream` SSE endpoint is live in `api/main.py`. `LLMClient.stream()` and `AnswerEngine.answer_stream()` are implemented in `src/answer/answer.py`. `streamQuestion()` with `StreamCallbacks` is in `frontend/src/api.ts`. `App.tsx` uses streaming exclusively (the non-streaming `askQuestion()` is retained for backward compatibility but is not called by the UI). The stream also emits a `{"type": "saved", "conv_id": ...}` event after the conversation is saved to history — this event type was added as part of the chat history feature and is not documented in the original plan below.
+
+---
+
 ## Problem
 
 The current `/api/ask` endpoint blocks until the entire LLM response is assembled before returning. For a typical answer this means 5–15 seconds of blank screen. Users have no feedback that anything is happening beyond a loading skeleton.

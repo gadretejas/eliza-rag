@@ -1,3 +1,9 @@
+## Status: Implemented
+
+This document records results from the first full synthetic evaluation run (20260515_101548). A second run (20260517_092638) has since been completed; its results are in `evals/results/20260517_092638.json`. The mitigation steps described in `docs/eval_mitigation_plan.md` were applied between runs.
+
+---
+
 # RAG Evaluation Analysis — Run 20260515_101548
 
 ## Overview

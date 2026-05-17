@@ -191,18 +191,18 @@ LIMIT 20;
 
 ## Integration with the pipeline
 
-### Current pipeline (after this change)
+### Current pipeline
 
 ```
-chunk.py        → chunks.jsonl
-contextualize.py → contexts_cache.json + contextualized_chunks.db
-embed.py        → reads chunks.jsonl → writes index.faiss (current)
-                  reads contextualized_chunks.db → writes to ChromaDB (post-migration)
+src/pipeline/chunk.py        → chunks.jsonl
+src/pipeline/contextualize.py → contexts_cache.json + contextualized_chunks.db
+src/pipeline/embed.py         → reads contextualized_chunks.db → writes to ChromaDB
+                                (falls back to chunks.jsonl if DB absent)
 ```
 
-### embed.py integration (post-ChromaDB migration)
+### embed.py integration
 
-`embed.py` will read enriched chunks directly from `contextualized_chunks.db` instead of `chunks.jsonl`, using the `enriched_text` field as the embedding input and all metadata fields for ChromaDB storage:
+`src/pipeline/embed.py` reads enriched chunks directly from `contextualized_chunks.db` (falling back to `chunks.jsonl` if absent), using the `enriched_text` field as the embedding input and all metadata fields for ChromaDB storage:
 
 ```python
 import sqlite3

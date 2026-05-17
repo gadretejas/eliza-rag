@@ -1,5 +1,11 @@
 # Chat History — Design & Implementation Plan
 
+## Status: Implemented
+
+This feature is fully implemented. `api/history.py` provides all DB access functions and the `/api/history` router. `init_history_db()` is called at startup in `api/main.py`. The streaming endpoint saves conversations via a `saved` event (the save happens before `done` is emitted so the frontend receives the `conv_id` while still in the stream). The `HistoryPage`, sidebar recent-chats section, and all API helpers in `api.ts` are implemented. Note: `get_conversations()` returns `tuple[list[ConversationRow], int]` (rows + total count), while the plan showed only a list.
+
+---
+
 ## Overview
 
 Every completed query (question + answer + retrieved chunks) is saved to SQLite, keyed on the

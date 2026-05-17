@@ -1,5 +1,15 @@
 # RBAC Implementation Plan
 
+## Status: Implemented
+
+This feature is fully implemented. Implementation diverges from the plan in three places worth noting:
+
+1. **bcrypt directly, not passlib** — `api/auth.py` uses `bcrypt` directly (`bcrypt.hashpw` / `bcrypt.checkpw`) rather than `passlib.CryptContext`. The `passlib[bcrypt]` dependency listed in the plan is not used.
+2. **JWT `sub` is integer user id, not email** — the token `sub` claim is `str(user.id)` (the integer primary key), not the user's email address. The plan showed `"sub": "user@example.com"`.
+3. **Viewer model allowlist** — the actual allowlist in `api/permissions.py` is `{"gpt-5.4-mini", "claude-haiku-4-5"}`, not `{"gpt-5.4-mini", "claude-haiku"}` as listed in the plan.
+
+---
+
 ## Current State
 
 The system is entirely open — any caller can query any company, any model, with no identity. There are no users, no sessions, no auth middleware. The FastAPI backend is stateless; the React frontend stores only model preferences in `localStorage`.

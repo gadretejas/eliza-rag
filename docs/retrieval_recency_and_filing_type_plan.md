@@ -1,5 +1,11 @@
 # Retrieval: Recency Preference & 10-K Filing Type Plan
 
+## Status: Implemented
+
+Both fixes are implemented in `src/retrieval/retrieve.py`. Fix 1 (10-K inference for Item 1A queries) is in `QueryRouter._extract_filing_type()`. Fix 2 (recency decay) is in `_apply_recency_preference()` with `RECENCY_DECAY = 0.95`. The recency preference is applied when no explicit date window is set in the route (`date_from is None and date_to is None`).
+
+---
+
 ## Problem
 
 Two related issues produce stale or thin results for risk factor queries:

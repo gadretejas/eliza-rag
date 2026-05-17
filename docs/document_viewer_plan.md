@@ -1,5 +1,11 @@
 # Document Viewer — Design & Implementation Plan
 
+## Status: Implemented
+
+This feature is fully implemented. One scope difference from the plan: the `GET /api/document` endpoint returns the **full document body** (XBRL preamble and Table of Contents stripped, but the full remaining text), not just the requested section. The `section` parameter is used only to resolve section metadata (`section_id`, `section_name`) for the panel header. This was a deliberate implementation choice — the full body is returned so the user can scroll the complete filing and see all highlighted chunks in context, not just those within a single section.
+
+---
+
 ## Overview
 
 Add a **"Show document"** button to the `CitationPanel` header. Clicking it fetches the full

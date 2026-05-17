@@ -162,3 +162,8 @@ Replace Rule 8 with:
 | v3 | Added "immediately after the claim" to Rule 1 | Model was batching citations at sentence ends |
 | v4 | Added Rule 7 (quote numbers exactly) | Paraphrased figures introduced unit ambiguity |
 | v4 | Replaced "helpful assistant" with domain framing | Reduced gap-filling with outside knowledge |
+| v4 (10-Q) | Added data context block; updated section map for 10-Q structure | NVDA has mostly 10-Q filings; Item 2 = MD&A for 10-Qs, not Item 7 |
+| v5 | LLM-based query routing with corpus context in `retrieve.py` | Category queries (e.g. "pharma companies") returned no tickers from regex; now resolved via LLM fallback |
+| followup/v1 | Introduced `prompts/followup_system_prompt.md` for multi-turn sessions | Single-turn prompt produced stiff, report-like tone in conversation |
+
+See `docs/system_prompt_change_history.md` for full prompt text at each version.

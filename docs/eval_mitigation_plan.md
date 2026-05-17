@@ -1,3 +1,9 @@
+## Status: Implemented
+
+Both mitigations in this plan have been applied. Step 1 (boilerplate question exclusion) was added to the sampler prompt in `evals/build_test_set.py`. Step 2 (comparative retrieval diversity) was implemented as `retrieve_comparative()` in `src/retrieval/retrieve.py`. A second evaluation run (20260517_092638) was completed after these changes.
+
+---
+
 # RAG Eval Mitigation Plan
 
 ## Current State vs Targets

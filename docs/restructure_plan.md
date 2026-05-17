@@ -1,5 +1,11 @@
 # Codebase Restructure Plan
 
+## Status: Implemented
+
+The full restructure is complete. All files are in their target locations under `src/pipeline/`, `src/retrieval/`, `src/answer/`, `api/`, `tests/`, and `scripts/`. `src/config.py` is the single source of truth for all paths and constants. Note: `src/config.py` also exports `FOLLOWUP_SYSTEM_PROMPT_PATH` and `OPENAI_BASE_URL` which were added after this plan was written (for the follow-up chat and custom LLM support features respectively).
+
+---
+
 ## Target Structure
 
 ```

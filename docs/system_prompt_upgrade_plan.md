@@ -1,5 +1,11 @@
 # System Prompt Upgrade Plan
 
+## Status: Implemented
+
+The system prompt has been updated (currently at v4). The brevity instruction has been removed, depth/structure rules have been added, and a data context block (corpus coverage summary) was prepended. A separate follow-up system prompt (`prompts/followup_system_prompt.md`) was also created for multi-turn chat sessions. See `docs/system_prompt_change_history.md` for the full version history.
+
+---
+
 ## Problem
 
 The current answer output is correct and well-cited but too brief. For a financial analyst tool, users expect depth: specific numbers, segment breakdowns, year-over-year trends, and caveats — not just a one-sentence answer with citations.

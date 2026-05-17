@@ -35,8 +35,6 @@ Answer(text, citations, metadata)
 ## Non-goals
 
 - No agentic multi-turn reasoning (deferred to `AgenticRetriever` — see `retrieval_design.md`)
-- No frontend implementation (parked — `Answer` dataclass is designed to be frontend-ready)
-- No streaming (can be added later; does not affect the design)
 
 ---
 
@@ -169,8 +167,14 @@ class AnswerConfig:
     max_tokens:       int   = 1024
     top_k:            int   = 15               # chunks passed to retriever
     max_chunk_chars:  int   = 2000             # truncate chunks for small-context models
+    provider:         str | None = None        # "openai" | "anthropic" | "local" | None
+    api_key:          str | None = None        # user-supplied API key (not cached)
+    base_url:         str | None = None        # override base URL for local/custom endpoints
+    allowed_tickers:  list[str] | None = None  # corpus restriction; None = unrestricted
     retriever_config: RetrieverConfig = field(default_factory=RetrieverConfig)
 ```
+
+`allowed_tickers` is set from the JWT claim at request time and passed into `RetrieverConfig` so the retriever restricts results to the user's allowed corpus. `provider`, `api_key`, and `base_url` support custom LLM endpoints configured via the Settings page.
 
 `max_chunk_chars` guards against context overflow on `gpt-5.4-mini` (400K) and Ollama models with tighter limits. At 15 chunks × 2000 chars the context block is ~7,500 tokens — well within all supported models.
 
@@ -197,15 +201,54 @@ class Answer:
 AnswerConfig          dataclass — all tuneable parameters
 Citation              dataclass — one cited source passage
 Answer                dataclass — complete response with citations
-LLMClient             wraps openai.OpenAI; routes to Ollama or OpenAI
-  .complete(messages) → str
-build_prompt()        formats retrieved chunks into numbered context block
+LLMClient             wraps openai.OpenAI / anthropic.Anthropic; routes by provider
+  .complete(system, user, ...)          → str
+  .stream(system, user, ...)            → Iterator[str]   (SSE token stream)
+  .stream_messages(messages, ...)       → Iterator[str]   (multi-turn SSE stream)
+build_chunk_context() formats retrieved chunks into numbered context block
+build_prompt()        wraps build_chunk_context() with question for single-turn
 parse_citations()     extracts [n] markers, maps to chunk list, validates
 AnswerEngine          orchestrates the full pipeline
-  .answer(question)              → Answer
-  .answer_with_trace(question)   → Answer  (with RetrievalTrace attached)
+  .answer(question)                          → Answer
+  .answer_with_trace(question)               → Answer  (with RetrievalTrace attached)
+  .answer_stream(question)                   → Iterator[dict]   (SSE events)
+  .followup_stream(history, question,
+                   tokens_so_far, context_limit) → Iterator[dict]  (SSE events, multi-turn)
 main()                CLI entry point
 ```
+
+### Streaming event types
+
+`answer_stream()` yields dicts in this order:
+
+```
+{"type": "sources",   "sources": [...]}
+{"type": "chunk",     "text": "..."}    ← one per token
+{"type": "citations", "valid": [1, 3]}
+{"type": "done"}
+{"type": "error",     "detail": "..."}  ← terminates stream on failure
+```
+
+`followup_stream()` yields the same events plus `token_count` events:
+
+```
+{"type": "token_count", "tokens_used": 4210, "context_limit": 128000}
+```
+
+emitted before the first `chunk` event (initial context size) and again after `done` (final accumulated size).
+
+### `LLMClient` routing
+
+The client now supports three provider backends:
+
+```
+provider="openai"    → api.openai.com/v1      (or custom base_url)
+provider="anthropic" → anthropic Python SDK
+provider="local"     → localhost:11434/v1      (Ollama-compatible)
+None (auto)          → openai if OPENAI_API_KEY set, else local
+```
+
+Custom `api_key` and `base_url` allow user-supplied endpoints from the Settings page. Engines using user-supplied keys are never cached in the `_engines` dict in `api/main.py`.
 
 ### `LLMClient` routing
 
@@ -224,24 +267,26 @@ If `OPENAI_API_KEY` is not set and the model is not prefixed with `ollama:`, the
 
 ## CLI interface
 
+The script is at `src/answer/answer.py`. Run as a module:
+
 ```bash
 # Dev — Ollama default
-python answer.py "What are NVDA's primary risk factors?"
+python -m src.answer.answer "What are NVDA's primary risk factors?"
 
 # Dev — explicit model
-python answer.py "What are NVDA's risks?" --model ollama:llama3.1:8b
+python -m src.answer.answer "What are NVDA's risks?" --model ollama:llama3.1:8b
 
 # Prod default (gpt-5.4-mini, requires OPENAI_API_KEY)
-python answer.py "What are NVDA's risks?"
+python -m src.answer.answer "What are NVDA's risks?"
 
 # Prod high quality
-python answer.py "What are NVDA's risks?" --model gpt-5.4
+python -m src.answer.answer "What are NVDA's risks?" --model gpt-5.4
 
 # Show retrieval details
-python answer.py "Compare Apple and Tesla revenue growth" --trace
+python -m src.answer.answer "Compare Apple and Tesla revenue growth" --trace
 
 # Tune retrieval
-python answer.py "MSFT cloud revenue 2023" --top-k 20
+python -m src.answer.answer "MSFT cloud revenue 2023" --top-k 20
 ```
 
 ### Example output
@@ -296,8 +341,5 @@ At 1,000 questions: `gpt-5.4-mini` ≈ $8, `gpt-5.4` ≈ $26.
 
 ## Future extensions
 
-- **Streaming** — `LLMClient.stream()` using the same OpenAI SDK; no design change required
 - **Structured output mode** — optional `--citation-mode structured` for OpenAI backends only; falls back to inline for Ollama
 - **Answer caching** — hash(question + top-k chunk IDs) as cache key; useful for demo/eval runs
-- **Multi-turn conversation** — pass prior `Answer.answer_text` as assistant turn; retriever re-runs per turn
-- **Frontend integration** — `Answer` dataclass serialises directly to JSON; `[n]` markers in `answer_text` map to `citations[n-1]` for chip rendering and passage preview

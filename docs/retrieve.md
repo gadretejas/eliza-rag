@@ -1,6 +1,8 @@
 # retrieve.py — Hybrid Retriever
 
-Implements a single-shot retrieval pipeline over the FAISS index built by `embed.py`. Given a natural-language question it returns the most relevant corpus chunks for the answer step.
+Located at `src/retrieval/retrieve.py`. Implements a single-shot retrieval pipeline over the ChromaDB collection built by `src/pipeline/embed.py`. Given a natural-language question it returns the most relevant corpus chunks for the answer step.
+
+The script moved from the project root to `src/retrieval/` as part of the restructure (see `docs/restructure_plan.md`). Import it as `from src.retrieval.retrieve import HybridRetriever, RetrieverConfig`.
 
 Pipeline:
 
@@ -16,7 +18,7 @@ question → QueryRouter → metadata-filtered ANN search → cross-encoder re-r
 ### As a library
 
 ```python
-from retrieve import HybridRetriever, RetrieverConfig
+from src.retrieval.retrieve import HybridRetriever, RetrieverConfig
 
 # Default config — local re-ranker, top 15 chunks
 retriever = HybridRetriever()
@@ -53,16 +55,16 @@ print(trace.scores)              # final relevance scores
 
 ```bash
 # Basic query
-python retrieve.py "What are Apple's biggest risk factors?"
+python -m src.retrieval.retrieve "What are Apple's biggest risk factors?"
 
 # Show routing and score details
-python retrieve.py "What are Apple's biggest risk factors?" --trace
+python -m src.retrieval.retrieve "What are Apple's biggest risk factors?" --trace
 
 # More results, no re-ranking
-python retrieve.py "NVDA revenue growth" --top-k 20 --no-rerank
+python -m src.retrieval.retrieve "NVDA revenue growth" --top-k 20 --no-rerank
 
 # Cohere re-ranker (requires COHERE_API_KEY)
-python retrieve.py "Tesla supply chain risks" --reranker cohere
+python -m src.retrieval.retrieve "Tesla supply chain risks" --reranker cohere
 ```
 
 ---
@@ -74,7 +76,7 @@ python retrieve.py "Tesla supply chain risks" --reranker cohere
 | `question` | (required) | Natural-language question |
 | `--top-k` | `15` | Number of chunks to return |
 | `--no-rerank` | off | Skip re-ranking, sort by ANN score only |
-| `--reranker` | `local` | Re-ranker backend: `local`, `cohere`, `none` |
+| `--reranker` | `none` | Re-ranker backend: `local`, `cohere`, `none` |
 | `--trace` | off | Print routing details and scores |
 
 ---
@@ -85,17 +87,18 @@ All retriever behaviour is controlled by a `RetrieverConfig` dataclass. Pass one
 
 | Field | Default | Description |
 |---|---|---|
-| `chunks_path` | `chunks.jsonl` | Path to the chunk corpus |
-| `index_path` | `index.faiss` | Path to the FAISS index |
+| `chroma_path` | from `src/config.py` | Path to the ChromaDB store directory |
+| `chroma_collection` | from `src/config.py` | ChromaDB collection name |
 | `candidates_per_company` | `20` | ANN candidates fetched per mentioned ticker |
 | `candidates_global` | `60` | ANN candidates when no ticker is mentioned |
 | `oversample_factor` | `8` | Multiply `top_k` before metadata post-filter |
 | `rerank` | `True` | Enable cross-encoder re-ranking |
-| `reranker` | `"local"` | Backend: `local`, `cohere`, or `none` |
+| `reranker` | `"none"` | Backend: `local`, `cohere`, or `none` |
 | `reranker_model` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder model (local backend) |
 | `cohere_model` | `rerank-english-v3.0` | Cohere model name |
 | `top_k` | `15` | Final chunks returned |
 | `min_per_company` | `None` | Min chunks per ticker (auto: `max(2, top_k // n_companies)`) |
+| `allowed_tickers` | `None` | RBAC corpus restriction; `None` = unrestricted |
 
 ---
 
@@ -140,15 +143,15 @@ If no keyword matches, defaults to `[Item 1A, Item 1, Item 7]`.
 
 ### VectorIndex
 
-Wraps the FAISS `IndexFlatIP`. Loaded once; all chunks are kept in memory for fast post-filter.
+Wraps a ChromaDB persistent client and collection. The collection is opened once at construction and kept open for the lifetime of the retriever.
 
 ```python
-index = VectorIndex(chunks_path, index_path)
+index = VectorIndex(chroma_path, collection_name)
 results = index.search(query_vec, filters, top_k=20, oversample_factor=8)
 # [(score, chunk_dict), ...]
 ```
 
-**Search** retrieves `top_k × oversample_factor` ANN candidates then post-filters by metadata. If fewer than `top_k // 2` chunks survive, two fallbacks are tried in order:
+**Search** retrieves `top_k × oversample_factor` ANN candidates via ChromaDB, then post-filters by metadata in Python. If fewer than `top_k // 2` chunks survive, two fallbacks are tried in order:
 
 1. Relax `date_from` filter (keep ticker + section constraints)
 2. Relax both `date_from` and `sections` (ticker constraint retained)
@@ -163,7 +166,7 @@ results = index.search(query_vec, filters, top_k=20, oversample_factor=8)
 | `filing_type` | `str` | `"10-K"` or `"10-Q"` prefix match |
 | `text_only` | `bool` | Exclude chunks where `content_type == "table"` |
 
-At startup the constructor validates that `index.ntotal == len(chunks)`. A mismatch means the index is out of sync with the corpus and raises a `ValueError` with a clear rebuild message.
+Note: date filtering is applied in Python post-retrieval (not via ChromaDB `where`) because ChromaDB's `where` clause only supports numeric comparisons and filing dates are stored as ISO-8601 strings. See `docs/chromadb_migration.md`.
 
 ---
 
@@ -212,14 +215,14 @@ When a question mentions multiple tickers, a greedy ANN search tends to over-rep
 
 ### Embedder auto-detection
 
-`HybridRetriever` reads the FAISS index dimension at startup and selects the matching query embedder:
+`HybridRetriever` selects the query embedder based on whether `OPENAI_API_KEY` is set:
 
-| Index dimension | Embedder |
+| Condition | Embedder |
 |---|---|
-| 1536 (+ `OPENAI_API_KEY` set) | `text-embedding-3-small` via OpenAI API |
-| 384 (or no API key) | `all-MiniLM-L6-v2` via sentence-transformers |
+| `OPENAI_API_KEY` set | `text-embedding-3-small` via OpenAI API |
+| No API key | `all-MiniLM-L6-v2` via sentence-transformers |
 
-This prevents the silent accuracy loss that would occur if the query and document embeddings were produced by different models. The index must be rebuilt with `embed.py` if you switch models.
+The embedder used at query time must match the model used at index-build time. The ChromaDB collection must be rebuilt with `src/pipeline/embed.py` if you switch embedding models.
 
 ---
 
@@ -282,12 +285,11 @@ Each chunk dict in the returned list has all fields from `chunks.jsonl` plus a `
 
 | Situation | Behaviour |
 |---|---|
-| Index not found | Hard exit with message: run `embed.py` first |
-| `chunks.jsonl` not found | Hard exit with message: run `chunk.py` first |
-| Index / chunk count mismatch | `ValueError` with rebuild instructions |
+| ChromaDB collection not found | Hard exit with message: run `embed.py` first |
+| ChromaDB collection empty | Hard exit with message: run `embed.py` first |
 | No chunks pass filters (strict date) | Relax `date_from`, retry |
 | Still too few after relaxing date | Relax `sections` too, retry |
-| `OPENAI_API_KEY` not set (dim=1536 index) | Falls back to local embedder (wrong model — rebuild recommended) |
+| `OPENAI_API_KEY` not set (OpenAI embed model requested) | Falls back to local embedder |
 | `sentence-transformers` not installed | Hard exit with install command |
 | `COHERE_API_KEY` not set (cohere reranker) | Hard exit with clear message |
 
@@ -297,7 +299,7 @@ Each chunk dict in the returned list has all fields from `chunks.jsonl` plus a `
 
 | Component | Typical latency (CPU) |
 |---|---|
-| FAISS ANN search (50k vectors) | ~2 ms |
+| ChromaDB ANN search (50k vectors) | ~2 ms |
 | Metadata post-filter (160 candidates) | <1 ms |
 | Local cross-encoder re-rank (40 candidates) | ~30 ms |
 | OpenAI query embedding | ~200 ms (network) |
@@ -313,8 +315,8 @@ All required. Install with `pip install -r requirements.txt`.
 
 | Package | Use |
 |---|---|
-| `faiss-cpu` | ANN index |
+| `chromadb` | Vector store |
 | `numpy` | Vector arithmetic |
 | `sentence-transformers` | Local re-ranker + local embedder |
-| `openai` | OpenAI query embedder (if using OpenAI index) |
-| `cohere` | Cohere re-ranker (optional, uncomment in requirements.txt) |
+| `openai` | OpenAI query embedder (if using OpenAI embedding model) |
+| `cohere` | Cohere re-ranker (optional) |

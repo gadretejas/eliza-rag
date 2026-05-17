@@ -33,7 +33,7 @@ Pricing sourced from official provider pricing pages (see [Sources](#sources)).
 | `BAAI/bge-large-en-v1.5` | local | free | **$0** | 1024 | 208 MB | Top open-source retrieval model |
 | `BAAI/bge-m3` | local | free | **$0** | 1024 | 208 MB | Dense + sparse; multilingual |
 
-Index size formula: `chunks × dim × 4 bytes (float32)` for `IndexFlatIP`.
+Approximate ChromaDB store size formula: `chunks × dim × 4 bytes (float32)` for the HNSW vector data, plus overhead for metadata.
 
 ---
 
@@ -59,16 +59,11 @@ For a graded assignment where answer precision over financial filings is the eva
 
 **Fallback: `text-embedding-3-small` ($0.40)**
 
-If no API key is available or cost is a concern, `text-embedding-3-small` is the best general-purpose alternative. It is already integrated into the codebase as the default `openai` backend in `embed.py`.
+If no API key is available or cost is a concern, `text-embedding-3-small` is the best general-purpose alternative. It is already integrated into the codebase as the default `openai` backend in `src/pipeline/embed.py`.
 
 **Free fallback: `BAAI/bge-large-en-v1.5` ($0)**
 
-The strongest free option. Scores 64.23 average / 54.29 retrieval on the MTEB benchmark (56 datasets), ranking among the top open-source retrieval models. [[2]](#sources) [[3]](#sources) Requires ~10–20 minutes on CPU to embed the full corpus but that is a one-time cost. Run with:
-
-```bash
-# Not yet wired into embed.py — requires adding a bge backend
-python embed.py --model local   # uses all-MiniLM-L6-v2 as current local default
-```
+The strongest free option. Scores 64.23 average / 54.29 retrieval on the MTEB benchmark (56 datasets), ranking among the top open-source retrieval models. [[2]](#sources) [[3]](#sources) Requires ~10–20 minutes on CPU to embed the full corpus but that is a one-time cost. Not yet wired into `src/pipeline/embed.py` as a named option; the `--model local` backend uses `all-MiniLM-L6-v2`.
 
 ---
 
@@ -88,16 +83,16 @@ At 10,000 queries the query-side cost is $1.20 (`voyage-finance-2`) or $0.20 (`t
 
 ## Implementation notes
 
-`embed.py` currently supports `openai` and `local` (all-MiniLM-L6-v2) backends. To use `voyage-finance-2`:
+`src/pipeline/embed.py` currently supports `openai` (text-embedding-3-small) and `local` (all-MiniLM-L6-v2) backends. To use `voyage-finance-2`:
 
 ```bash
 pip install voyageai
 export VOYAGE_API_KEY=...
 ```
 
-Then extend `embed.py` with a `voyage` backend following the same pattern as the `openai` backend (`--model voyage`). `retrieve.py`'s `_load_embedder()` would need a corresponding branch for dim=1024 + Voyage API key detection.
+Then extend `src/pipeline/embed.py` with a `voyage` backend following the same pattern as the `openai` backend (`--model voyage`). `src/retrieval/retrieve.py`'s embedder selection would need a corresponding branch.
 
-> **Important**: the model used at embed time must match the model used at query time. Mixing models silently degrades retrieval quality. `retrieve.py` auto-detects the backend from the index dimension (1536 → OpenAI, 384 → local); a Voyage branch would need to distinguish dim=1024 from Cohere/BGE dim=1024 — the simplest approach is a sidecar file (e.g. `index.meta.json`) that records the model name at embed time.
+> **Important**: the model used at embed time must match the model used at query time. Mixing models silently degrades retrieval quality. With ChromaDB the collection does not encode dimension metadata externally, so the model name should be recorded in `contextualized_chunks.db`'s `meta` table (which already tracks `model`) to prevent accidental mismatches after rebuilds.
 
 ---
 

@@ -4,7 +4,7 @@ All costs are one-time unless noted. Once an artifact is generated it is reused 
 
 ---
 
-## Contextualization (`contextualize.py`)
+## Contextualization (`src/pipeline/contextualize.py`)
 
 ### Measured test run
 
@@ -31,7 +31,7 @@ The full corpus estimate is extrapolated directly from the measured $0.04 test c
 
 ---
 
-## Embedding (`embed.py`)
+## Embedding (`src/pipeline/embed.py`)
 
 | Model | Cost |
 |---|---|
@@ -54,13 +54,13 @@ Full analysis and model comparison in [embedding_models.md](embedding_models.md)
 
 Reasons:
 - 6.5× cheaper with marginal real-world quality difference for this use case
-- SEC filings are structured and keyword-rich — the enriched context added by `contextualize.py` already closes most of the semantic gap between the two models
+- SEC filings are structured and keyword-rich — the enriched context added by `src/pipeline/contextualize.py` already closes most of the semantic gap between the two models
 - Leaves budget for re-runs and runtime query embeddings within a $10 OpenAI credit
 - `large` is worth revisiting only if retrieval quality proves insufficient after evaluation
 
 ---
 
-## Answer generation (`answer.py`)
+## Answer generation (`src/answer/answer.py`)
 
 Cost per query at typical prompt size (~8,000 input tokens, ~400 output tokens):
 

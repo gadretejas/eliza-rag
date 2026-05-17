@@ -1,3 +1,9 @@
+## Status: Implemented
+
+The ROUGE/BERTScore tier of this plan was implemented and then superseded. A full run confirmed that ROUGE-1 F1 scores (~0.19) were artificially low even when the answer was correct, because abstractive paraphrasing does not produce lexical overlap with the hand-written reference. The evaluation approach was replaced by the LLM-as-judge synthetic evaluation described in `docs/synthetic_eval_plan.md`. The gold-dataset-based `run_eval.py` and `evals/metrics/` files were removed; the current implementation lives in `evals/build_test_set.py`, `evals/run_rag.py`, `evals/run_judge.py`, and `evals/run_synthetic_eval.py`, with data written to `evals/data/` and results to `evals/results/`.
+
+---
+
 # RAG Evaluation Plan
 
 ## Overview

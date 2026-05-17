@@ -1,5 +1,11 @@
 # Citation Panel UX Redesign — Plan
 
+## Status: Implemented
+
+This feature is fully implemented. `CitationPanel.tsx` and `SourceFooter.tsx` are both live. The document viewer feature was subsequently added on top of `CitationPanel`: the panel now also has a "Show document" toggle that fetches and displays the full filing text with snippets highlighted inline (see `docs/document_viewer_plan.md`). The `SourceCard.tsx` component is not used inside `CitationPanel` as the original plan suggested — the panel renders its own chunk cards directly. `SourceList.tsx` and `SourceCard.tsx` remain in use in the HistoryPage accordion as planned.
+
+---
+
 ## Overview
 
 Replace the always-visible source card list below the answer with two things:

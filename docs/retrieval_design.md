@@ -118,12 +118,14 @@ When no tickers are found, `tickers` is empty and the retriever fans out across 
 
 An ANN index over the embeddings of all chunk `text` fields. Each vector stores the full chunk metadata as a payload, enabling pre-filter queries without a secondary lookup.
 
-**Recommended setup**
+**Current setup**
+
+The vector store is a ChromaDB persistent collection (HNSW-backed). The ChromaDB embedded client (`PersistentClient`) is used rather than a Docker HTTP service — simpler deployment with the same API. See `docs/chromadb_migration.md` for details.
 
 | Scenario | Index | Embedding model |
 |---|---|---|
-| Local / no API key | FAISS `IndexFlatIP` | `text-embedding-3-small` (OpenAI) |
-| Production / hosted | Pinecone or Qdrant | `text-embedding-3-small` or `voyage-finance-2` |
+| Local / no API key | ChromaDB + HNSW | `all-MiniLM-L6-v2` (sentence-transformers) |
+| Production | ChromaDB + HNSW | `text-embedding-3-small` (OpenAI) or `voyage-finance-2` |
 
 `voyage-finance-2` is worth considering — it is explicitly trained on financial documents and outperforms general-purpose models on financial retrieval benchmarks. The embedding dimension is 1024 vs 1536 for `text-embedding-3-small`, which also reduces index size.
 

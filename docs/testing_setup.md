@@ -2,16 +2,18 @@
 
 ## Overview of what runs where
 
-| Script | What it uses | Needs Ollama? | Needs API key? |
-|---|---|---|---|
-| `chunk.py` | Pure Python | No | No |
-| `embed.py --model local` | sentence-transformers (CPU) | No | No |
-| `embed.py --model openai` | OpenAI Embeddings API | No | Yes (`OPENAI_API_KEY`) |
-| `retrieve.py` | FAISS + sentence-transformers | No | No (local index) |
-| `answer.py --model ollama:*` | Ollama (local LLM) | Yes | No |
-| `answer.py --model gpt-5.4*` | OpenAI Chat API | No | Yes (`OPENAI_API_KEY`) |
+After the codebase restructure (see `docs/restructure_plan.md`), all pipeline scripts moved into `src/`. Run them as Python modules:
 
-**Ollama is only needed for `answer.py`.** The embedding step runs entirely on CPU via `sentence-transformers`.
+| Script | Module invocation | What it uses | Needs Ollama? | Needs API key? |
+|---|---|---|---|---|
+| `src/pipeline/chunk.py` | `python -m src.pipeline.chunk` | Pure Python | No | No |
+| `src/pipeline/embed.py --model local` | `python -m src.pipeline.embed --model local` | sentence-transformers (CPU) | No | No |
+| `src/pipeline/embed.py --model openai` | `python -m src.pipeline.embed --model openai` | OpenAI Embeddings API + ChromaDB | No | Yes (`OPENAI_API_KEY`) |
+| `src/retrieval/retrieve.py` | `python -m src.retrieval.retrieve` | ChromaDB + sentence-transformers | No | No (local index) |
+| `src/answer/answer.py --model ollama:*` | `python -m src.answer.answer --model ollama:llama3.2` | Ollama (local LLM) | Yes | No |
+| `src/answer/answer.py --model gpt-5.4*` | `python -m src.answer.answer` | OpenAI Chat API | No | Yes (`OPENAI_API_KEY`) |
+
+**Ollama is only needed for `answer.py`.** The embedding step runs entirely on CPU via `sentence-transformers`. The vector index is now ChromaDB (not FAISS) — see `docs/chromadb_migration.md`.
 
 ---
 
@@ -36,7 +38,7 @@ python3 -c "import faiss, sentence_transformers, numpy; print('dependencies OK')
 If `chunks.jsonl` does not exist yet:
 
 ```bash
-python3 chunk.py
+python -m src.pipeline.chunk
 ```
 
 Expected output: `50,676 chunks` written to `chunks.jsonl`. Takes ~30 seconds.
@@ -48,37 +50,22 @@ Expected output: `50,676 chunks` written to `chunks.jsonl`. Takes ~30 seconds.
 ### Option A — Local model (recommended for testing, free, no API key)
 
 ```bash
-python3 embed.py --model local
+python -m src.pipeline.embed --model local
 ```
 
 - Model: `all-MiniLM-L6-v2` (downloaded automatically on first run, ~90 MB)
-- Index dimension: 384
-- Index size: ~78 MB
+- Vector store: ChromaDB (persisted to `chroma_db/`)
 - Time: ~4 minutes on CPU (M-series Mac), ~8 minutes on Intel
-
-Expected output:
-
-```
-Loading chunks from chunks.jsonl ...
-  50,676 chunks
-Model : local all-MiniLM-L6-v2  (dim=384)
-  Batch  254/ 254  (50600–50676)  [245s]
-
-Index saved → index.faiss  (78 MB)
-Vectors : 50,676
-Time    : 245s
-```
 
 ### Option B — OpenAI (higher quality, costs ~$0.40)
 
 ```bash
 export OPENAI_API_KEY=sk-...
-python3 embed.py --model openai
+python -m src.pipeline.embed --model openai
 ```
 
 - Model: `text-embedding-3-small`
-- Index dimension: 1536
-- Index size: ~311 MB
+- Vector store: ChromaDB (persisted to `chroma_db/`)
 - Time: ~4 minutes (rate-limit paced)
 
 ---
@@ -86,7 +73,7 @@ python3 embed.py --model openai
 ## Step 4 — Smoke-test the retriever
 
 ```bash
-python3 retrieve.py "What are Apple's biggest risk factors?" --trace
+python -m src.retrieval.retrieve "What are Apple's biggest risk factors?" --trace
 ```
 
 Expected output shows routing details and 15 ranked chunks. Verify:
@@ -95,7 +82,7 @@ Expected output shows routing details and 15 ranked chunks. Verify:
 - Results show `AAPL` chunks from `Item 1A — Risk Factors`
 
 ```bash
-python3 retrieve.py "Compare Apple and Microsoft revenue growth" --trace
+python -m src.retrieval.retrieve "Compare Apple and Microsoft revenue growth" --trace
 ```
 
 Verify: `Tickers: ['AAPL', 'MSFT']`, results contain chunks from both companies.
@@ -187,14 +174,14 @@ docker start ollama
 
 ```bash
 # Ensure ollama serve is running, then:
-python3 answer.py "What are NVDA's primary risk factors?" --model ollama:llama3.2 --trace
+python -m src.answer.answer "What are NVDA's primary risk factors?" --model ollama:llama3.2 --trace
 ```
 
 ### With OpenAI
 
 ```bash
 export OPENAI_API_KEY=sk-...
-python3 answer.py "What are NVDA's primary risk factors?" --trace
+python -m src.answer.answer "What are NVDA's primary risk factors?" --trace
 # Uses gpt-5.4-mini by default
 ```
 
@@ -253,17 +240,13 @@ Llama 3.2 (3B) is the fastest option. For Intel without GPU, expect ~10–20 tok
 Expected — the warning fires when no key is present and the model is not prefixed with `ollama:`. Use the prefix explicitly:
 
 ```bash
-python3 answer.py "..." --model ollama:llama3.2
+python -m src.answer.answer "..." --model ollama:llama3.2
 ```
 
-**Index and chunks out of sync**
-
-```
-ValueError: Index has X vectors but Y chunks — rebuild with embed.py.
-```
+**ChromaDB collection empty or missing**
 
 Re-run `embed.py` after any change to `chunks.jsonl`:
 
 ```bash
-python3 embed.py --model local
+python -m src.pipeline.embed --model local
 ```

@@ -1,5 +1,11 @@
 # Retrieval Date Filtering Plan
 
+## Status: Implemented
+
+All three fixes are implemented in `src/retrieval/retrieve.py`. `RouteResult` now carries both `date_from` and `date_to`. The `_apply_date_filter()`, `_apply_date_penalty()`, and `_apply_recency_preference()` helpers are all present. ChromaDB's `$gte`/`$lte` operators only support numeric comparisons, so date filtering is done in Python post-retrieval rather than inside the ChromaDB `where` clause — this is equivalent in effect.
+
+---
+
 ## Problem
 
 When a user asks a time-specific question (e.g. "as of 2024", "fiscal 2024"),

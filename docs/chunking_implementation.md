@@ -359,8 +359,10 @@ OUTPUT_PATH = Path("chunks.jsonl")
 
 ## Running
 
+The script is at `src/pipeline/chunk.py`. Run as a module:
+
 ```bash
-python3 chunk.py
+python -m src.pipeline.chunk
 ```
 
 No dependencies beyond the Python standard library. Processes all 246 files and writes `chunks.jsonl` in approximately 30 seconds. Progress is printed per file with a chunk count.
@@ -368,7 +370,7 @@ No dependencies beyond the Python standard library. Processes all 246 files and 
 To process a single file in a Python session:
 
 ```python
-from chunk import process_file
+from src.pipeline.chunk import process_file
 from pathlib import Path
 
 for chunk in process_file(Path("edgar_corpus/NVDA_10K_2025-02-26_full.txt")):

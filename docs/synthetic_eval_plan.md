@@ -1,3 +1,9 @@
+## Status: Implemented
+
+The three-stage pipeline is fully implemented. Scripts are at `evals/build_test_set.py` (Stage 1), `evals/run_rag.py` (Stage 2), `evals/run_judge.py` (Stage 3), and `evals/run_synthetic_eval.py` (orchestrator). Data files land in `evals/data/` and results in `evals/results/`. Two eval runs have been completed (20260515_101548 and 20260517_092638). The file layout in the "File Layout" section below describes the planned layout; the actual layout differs — see the correction note at that section.
+
+---
+
 # Synthetic Evaluation Plan — LLM-as-Sampler + LLM-as-Judge
 
 ## Overview
@@ -226,20 +232,22 @@ quality problem.
 
 ## File Layout
 
+Note: the planned `evals/synthetic/` subdirectory was not used. Scripts are directly under `evals/` and data files are under `evals/data/`.
+
 ```
 evals/
-  synthetic/
-    build_test_set.py       — Stage 1: sample corpus, call Sampler LLM, write JSONL
-    run_rag.py              — Stage 2: send questions to RAG, write rag_outputs.jsonl
-    run_judge.py            — Stage 3: compare answers, write judge_results.jsonl
-    run_synthetic_eval.py   — Orchestrator: runs all three stages end-to-end
+  build_test_set.py         — Stage 1: sample corpus, call Sampler LLM, write JSONL
+  run_rag.py                — Stage 2: send questions to RAG, write rag_outputs.jsonl
+  run_judge.py              — Stage 3: compare answers, write judge_results.jsonl
+  run_synthetic_eval.py     — Orchestrator: runs all three stages end-to-end
+  data/
     corpus_sample.json      — Which files were selected and why (audit trail)
     synthetic_test_set.jsonl
     rag_outputs.jsonl
     judge_results.jsonl
-    results/
-      summary.md
-      <timestamp>.json
+  results/
+    summary.md
+    <timestamp>.json
 ```
 
 ---

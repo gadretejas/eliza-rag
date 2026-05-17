@@ -1,6 +1,8 @@
-# embed.py — Index Builder
+# embed.py — ChromaDB Collection Builder
 
-Reads `chunks.jsonl`, embeds every chunk's text field, and writes a FAISS vector index to `index.faiss`. Run once after `chunk.py`. The index is then loaded by `retrieve.py` at query time.
+Located at `src/pipeline/embed.py`. Reads from `contextualized_chunks.db` (falling back to `chunks.jsonl` if the DB is absent), embeds every chunk's enriched text, and writes to a ChromaDB persistent collection. Run once after `contextualize.py` (or `chunk.py` if skipping contextualization). The ChromaDB collection is then queried by `src/retrieval/retrieve.py` at query time.
+
+The script moved from the project root to `src/pipeline/` as part of the restructure (see `docs/restructure_plan.md`). Run it as a module: `python -m src.pipeline.embed`.
 
 ---
 
@@ -8,16 +10,19 @@ Reads `chunks.jsonl`, embeds every chunk's text field, and writes a FAISS vector
 
 ```bash
 # OpenAI text-embedding-3-small (default, needs OPENAI_API_KEY)
-python embed.py
+python -m src.pipeline.embed
 
 # Local all-MiniLM-L6-v2, no API key required
-python embed.py --model local
+python -m src.pipeline.embed --model local
 
-# Override batch size (default 200)
-python embed.py --batch-size 100
+# Delete existing collection and rebuild from scratch
+python -m src.pipeline.embed --reset
 
-# Custom input / output paths
-python embed.py --chunks data/chunks.jsonl --output data/index.faiss
+# Parallel embedding workers (default: 5)
+python -m src.pipeline.embed --workers 10
+
+# Custom ChromaDB store location
+python -m src.pipeline.embed --path ./chroma_store
 ```
 
 ---
@@ -27,9 +32,10 @@ python embed.py --chunks data/chunks.jsonl --output data/index.faiss
 | Argument | Default | Description |
 |---|---|---|
 | `--model` | `openai` | Embedding backend: `openai` or `local` |
-| `--batch-size` | `200` | Chunks per API / inference call |
-| `--chunks` | `chunks.jsonl` | Path to the chunked corpus |
-| `--output` | `index.faiss` | Path to write the FAISS index |
+| `--batch-size` | `200` | Chunks per embedding call |
+| `--reset` | off | Delete and rebuild the ChromaDB collection from scratch |
+| `--workers` | `5` | Parallel embedding workers |
+| `--path` | `chroma_db/` (from `src/config.py`) | ChromaDB store directory |
 
 ---
 
@@ -70,17 +76,12 @@ The local model produces a smaller index (78 MB vs ~300 MB for OpenAI) and requi
 
 ## Output
 
-`index.faiss` — a `faiss.IndexFlatIP` (inner product index) containing one normalised float32 vector per chunk. The vector at position `i` in the index corresponds to the chunk at line `i` in `chunks.jsonl`.
+A ChromaDB persistent collection stored in `chroma_db/` (path configured in `src/config.py` via `CHROMA_PATH`). Each document in the collection stores:
 
-### Index type
+- The embedded text (enriched chunk from `contextualized_chunks.db`, or raw text from `chunks.jsonl` as fallback)
+- All chunk metadata as ChromaDB metadata fields (ticker, filing_date, section_id, content_type, etc.)
 
-`IndexFlatIP` performs exact nearest-neighbour search using inner product similarity. After L2 normalisation (applied during embedding), inner product is equivalent to cosine similarity. Exact search is used rather than an approximate index (HNSW, IVF) because:
-
-- At 50,676 vectors, exact search takes ~2ms per query — fast enough for a live demo
-- No training step required
-- No recall trade-off
-
-Rebuild with an approximate index if the corpus grows beyond ~500k chunks and query latency becomes a concern.
+ChromaDB uses approximate nearest-neighbour search (HNSW index) internally. At 50,676 vectors the index is fast (~2ms per query) and requires no training. See `docs/chromadb_migration.md` for the full migration details.
 
 ---
 
@@ -98,44 +99,44 @@ For the OpenAI backend, a 50ms sleep is inserted between batches to stay within 
 
 ### 3. L2 normalise
 
-Each embedding vector is L2-normalised before being added to the FAISS index:
+Each embedding vector is L2-normalised before being stored in ChromaDB:
 
 ```python
 norms = np.linalg.norm(vecs, axis=1, keepdims=True)
 vecs  = vecs / np.where(norms == 0, 1.0, norms)
 ```
 
-This ensures that inner product scores in the index equal cosine similarity scores, which are more interpretable (range roughly −1 to 1). The query vector is normalised the same way in `retrieve.py`.
+This ensures cosine similarity scores when ChromaDB performs ANN search. The query vector is normalised the same way in `src/retrieval/retrieve.py`.
 
-### 4. Write index
+### 4. Write to ChromaDB
 
-The FAISS index is written to disk with `faiss.write_index()`. The index file stores both the vectors and the dimension metadata. No separate metadata file is needed because chunk metadata is loaded from `chunks.jsonl` at retrieval time (the index position maps 1:1 to line number in `chunks.jsonl`).
+Each batch of embedded chunks is upserted into the ChromaDB collection using the chunk ID as the document ID. Re-running embed without `--reset` will upsert (overwrite) existing chunks and add new ones, leaving unchanged chunks intact.
 
 ---
 
 ## Rebuilding
 
-Rebuild the index whenever `chunks.jsonl` changes (i.e. after re-running `chunk.py`). The index position → chunk line mapping must stay in sync.
+Rebuild the collection whenever `chunks.jsonl` or `contextualized_chunks.db` changes (i.e. after re-running `chunk.py` or `contextualize.py`).
 
 ```bash
-python chunk.py      # regenerate chunks.jsonl
-python embed.py      # rebuild index.faiss
+python -m src.pipeline.chunk          # regenerate chunks.jsonl
+python -m src.pipeline.contextualize  # regenerate contextualized_chunks.db
+python -m src.pipeline.embed          # upsert into ChromaDB
 ```
 
-To switch embedding models, delete the old `index.faiss` and rebuild:
+To switch embedding models, reset the collection and rebuild:
 
 ```bash
-rm index.faiss
-python embed.py --model local   # or openai
+python -m src.pipeline.embed --reset --model local   # or openai
 ```
 
 ---
 
 ## Disk and memory
 
-| Model | Index size | RAM at query time |
+| Model | ChromaDB store size | Notes |
 |---|---|---|
-| `openai` (dim=1536) | ~300 MB | ~300 MB (loaded fully by FAISS) |
-| `local` (dim=384) | ~78 MB | ~78 MB |
+| `openai` (dim=1536) | ~300–350 MB | Stored in `chroma_db/` directory |
+| `local` (dim=384) | ~80–100 MB | Stored in `chroma_db/` directory |
 
-`retrieve.py` loads the index into memory on first query. On a machine with 8 GB RAM either model is comfortably within budget.
+ChromaDB keeps the HNSW index resident in memory when the client is open. `src/retrieval/retrieve.py` holds a persistent client open for the lifetime of the API process. On a machine with 8 GB RAM either model is comfortably within budget.
