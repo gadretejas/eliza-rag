@@ -13,6 +13,12 @@ chromadb>=0.6
 fastapi>=0.110
 uvicorn>=0.29
 
+# Evaluation (evals/)
+rouge-score>=0.1.2
+bert-score>=0.3.13
+nltk>=3.8
+pandas>=2.0
+
 # Optional re-rankers (uncomment as needed)
 # cohere>=5.0
 # voyageai>=0.3

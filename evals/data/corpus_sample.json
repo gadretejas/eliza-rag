@@ -1,0 +1,89 @@
+{
+  "seed": 42,
+  "files_per_sector": 8,
+  "sampler_model": "gpt-5.4",
+  "selected": {
+    "Technology": [
+      "META_10K_2024Q4_2025-01-30_full.txt",
+      "AAPL_10Q_2022Q1_2022-04-29_full.txt",
+      "META_10Q_2024Q1_2024-04-25_full.txt",
+      "MSFT_10Q_2024Q4_2025-01-29_full.txt",
+      "GOOG_10K_2023Q4_2024-01-31_full.txt",
+      "GOOG_10Q_2023Q1_2023-04-26_full.txt",
+      "NVDA_10K_2022Q1_2022-03-18_full.txt",
+      "MSFT_10K_2023Q2_2023-07-27_full.txt"
+    ],
+    "Healthcare_Pharma": [
+      "MRK_10K_2025-02-25_full.txt",
+      "JNJ_10Q_2025Q3_2025-10-22_full.txt",
+      "PFE_10K_2023Q4_2024-02-22_full.txt",
+      "JNJ_10K_2022Q1_2022-02-17_full.txt",
+      "UNH_10Q_2022Q1_2022-05-04_full.txt",
+      "PFE_10Q_2024Q2_2024-08-05_full.txt",
+      "JNJ_10Q_2023Q4_2023-10-27_full.txt",
+      "UNH_10K_2022Q4_2023-02-24_full.txt"
+    ],
+    "Financial_Banking": [
+      "BAC_10K_2025-02-25_full.txt",
+      "BAC_10Q_2025Q2_2025-07-31_full.txt",
+      "MA_10K_2026-02-11_full.txt",
+      "JPM_10Q_2025Q3_2025-11-04_full.txt",
+      "GS_10K_2025-02-27_full.txt",
+      "BAC_10Q_2025Q3_2025-10-31_full.txt",
+      "JPM_10Q_2025Q2_2025-08-05_full.txt",
+      "BLK_10K_2024-02-23_full.txt"
+    ],
+    "Industrial_Defense": [
+      "LMT_10K_2026-01-29_full.txt",
+      "BA_10K_2026-01-30_full.txt",
+      "GE_10K_2015-02-27_full.txt",
+      "RTX_10K_2026-02-06_full.txt",
+      "DE_10K_2025-12-18_full.txt",
+      "CAT_10K_2026-02-13_full.txt"
+    ],
+    "Media_Entertainment": [
+      "DIS_10Q_2023Q3_2023-08-09_full.txt",
+      "DIS_10K_2024Q3_2024-11-14_full.txt",
+      "DIS_10Q_2025Q1_2025-05-07_full.txt",
+      "DIS_10K_2025-11-13_full.txt",
+      "DIS_10K_2023Q3_2023-11-21_full.txt",
+      "DIS_10K_2022Q4_2022-11-29_full.txt",
+      "DIS_10Q_2023Q4_2024-02-07_full.txt",
+      "DIS_10Q_2022Q1_2022-02-09_full.txt"
+    ],
+    "Consumer_Retail": [
+      "MCD_10Q_2023Q1_2023-05-04_full.txt",
+      "PEP_10K_2026-02-03_full.txt",
+      "KO_10Q_2024Q2_2024-07-29_full.txt",
+      "KO_10Q_2022Q2_2022-04-28_full.txt",
+      "KO_10K_2022Q4_2023-02-21_full.txt",
+      "KO_10Q_2025Q1_2025-05-01_full.txt",
+      "KO_10K_2023Q4_2024-02-20_full.txt",
+      "PG_10K_2025-08-04_full.txt"
+    ],
+    "Energy": [
+      "XOM_10K_2026-02-18_full.txt",
+      "XOM_10K_2023Q4_2024-02-28_full.txt",
+      "XOM_10K_2022Q4_2023-02-22_full.txt",
+      "XOM_10Q_2025Q1_2025-05-05_full.txt",
+      "XOM_10Q_2022Q2_2022-08-03_full.txt",
+      "CVX_10K_2025-02-21_full.txt",
+      "XOM_10Q_2024Q1_2024-04-29_full.txt",
+      "XOM_10Q_2023Q2_2023-08-01_full.txt"
+    ],
+    "Automotive": [
+      "TSLA_10Q_2023Q3_2023-10-23_full.txt",
+      "TSLA_10Q_2025Q2_2025-07-24_full.txt",
+      "TSLA_10Q_2024Q2_2024-07-24_full.txt",
+      "TSLA_10K_2024Q4_2025-01-30_full.txt",
+      "TSLA_10Q_2022Q1_2022-04-25_full.txt",
+      "TSLA_10K_2022Q4_2023-01-31_full.txt",
+      "TSLA_10K_2026-01-29_full.txt",
+      "TSLA_10K_2023Q4_2024-01-29_full.txt"
+    ],
+    "Telecom": [
+      "T_10K_2026-02-09_full.txt",
+      "VZ_10K_2026-02-17_full.txt"
+    ]
+  }
+}
