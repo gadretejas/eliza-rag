@@ -1,16 +1,29 @@
+import { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { getRecentHistory } from "../api";
+import type { ConversationSummary } from "../types";
 
-type Page = "chat" | "about" | "settings" | "admin";
+type Page = "chat" | "about" | "settings" | "admin" | "history";
 
 interface Props {
-  open:        boolean;
-  currentPage: Page;
-  onNavigate:  (page: Page) => void;
-  onClose:     () => void;
+  open:          boolean;
+  currentPage:   Page;
+  onNavigate:    (page: Page) => void;
+  onClose:       () => void;
+  onSelectChat?: (id: number) => void;
 }
 
-export default function Sidebar({ open, currentPage, onNavigate, onClose }: Props) {
+export default function Sidebar({ open, currentPage, onNavigate, onClose, onSelectChat }: Props) {
   const { user, logout, isAdmin } = useAuth();
+  const [recentChats, setRecentChats] = useState<ConversationSummary[]>([]);
+
+  // Refresh recent chats each time the sidebar opens
+  useEffect(() => {
+    if (!open) return;
+    getRecentHistory()
+      .then((data) => setRecentChats(data.items))
+      .catch(() => setRecentChats([]));
+  }, [open]);
 
   const NAV_ITEMS: { page: Page; label: string; adminOnly?: boolean; icon: React.ReactNode }[] = [
     {
@@ -19,6 +32,16 @@ export default function Sidebar({ open, currentPage, onNavigate, onClose }: Prop
       icon: (
         <svg viewBox="0 0 20 20" fill="none" className="w-4 h-4" stroke="currentColor" strokeWidth="1.5">
           <path d="M2 4.5A1.5 1.5 0 013.5 3h13A1.5 1.5 0 0118 4.5v9a1.5 1.5 0 01-1.5 1.5H11l-3 3v-3H3.5A1.5 1.5 0 012 13.5v-9z"
+                strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      page: "history",
+      label: "History",
+      icon: (
+        <svg viewBox="0 0 20 20" fill="none" className="w-4 h-4" stroke="currentColor" strokeWidth="1.5">
+          <path d="M10 6v4l2.5 2.5M10 17.5a7.5 7.5 0 100-15 7.5 7.5 0 000 15z"
                 strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       ),
@@ -105,7 +128,7 @@ export default function Sidebar({ open, currentPage, onNavigate, onClose }: Prop
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-2 py-3 flex flex-col gap-0.5">
+        <nav className="flex-1 px-2 py-3 flex flex-col gap-0.5 overflow-y-auto">
           {visibleItems.map(({ page, label, icon }) => (
             <button
               key={page}
@@ -121,6 +144,34 @@ export default function Sidebar({ open, currentPage, onNavigate, onClose }: Prop
               {label}
             </button>
           ))}
+
+          {/* Recent chats */}
+          {recentChats.length > 0 && (
+            <div className="mt-3">
+              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider
+                            text-gray-400 dark:text-slate-500">
+                Recent
+              </p>
+              {recentChats.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => {
+                    if (onSelectChat) onSelectChat(c.id);
+                    onNavigate("history");
+                    onClose();
+                  }}
+                  title={c.title}
+                  className="w-full text-left px-3 py-1.5 rounded-lg text-xs
+                             text-gray-600 dark:text-slate-400
+                             hover:bg-gray-100 dark:hover:bg-slate-800
+                             hover:text-gray-900 dark:hover:text-slate-100
+                             truncate transition-colors"
+                >
+                  {c.title}
+                </button>
+              ))}
+            </div>
+          )}
         </nav>
 
         {/* User info + logout */}

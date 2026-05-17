@@ -13,8 +13,9 @@ import Sidebar from "./components/Sidebar";
 import SettingsPage from "./components/SettingsPage";
 import AboutDataPage from "./components/AboutDataPage";
 import AdminPage from "./pages/AdminPage";
+import HistoryPage from "./pages/HistoryPage";
 
-type Page = "chat" | "about" | "settings" | "admin";
+type Page = "chat" | "about" | "settings" | "admin" | "history";
 
 function loadSavedModels(): SavedModel[] {
   try {
@@ -34,6 +35,7 @@ function AppInner() {
   const { user }                      = useAuth();
   const [page, setPage]               = useState<Page>("chat");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeChatId, setActiveChatId] = useState<number | null>(null);
   const [savedModels, setSavedModels]       = useState<SavedModel[]>(loadSavedModels);
   const [question, setQuestion]             = useState("");
   const [model, setModel]                   = useState("gpt-5.4-mini");
@@ -113,6 +115,7 @@ function AppInner() {
         currentPage={page}
         onNavigate={setPage}
         onClose={() => setSidebarOpen(false)}
+        onSelectChat={(id) => { setActiveChatId(id); setPage("history"); }}
       />
 
       {/* Header */}
@@ -162,7 +165,12 @@ function AppInner() {
       </header>
 
       {/* Page content */}
-      {page === "admin" ? (
+      {page === "history" ? (
+        <HistoryPage
+          activeChatId={activeChatId}
+          onClearActiveChatId={() => setActiveChatId(null)}
+        />
+      ) : page === "admin" ? (
         <AdminPage />
       ) : page === "settings" ? (
         <SettingsPage

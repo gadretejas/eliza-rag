@@ -22,10 +22,14 @@ from src.answer.answer import AnswerConfig, AnswerEngine
 from api.auth import TokenClaims, get_current_user, router as auth_router
 from api.permissions import check_model_access, check_rate_limit, get_ticker_filter
 from api.users import init_db
+from api.history import (
+    init_history_db, save_conversation, router as history_router,
+)
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
-init_db()   # creates users table and seeds default admin on first boot
+init_db()           # creates users table and seeds default admin on first boot
+init_history_db()   # creates conversations table
 
 app = FastAPI(title="SEC EDGAR RAG API", version="2.0.0")
 
@@ -89,6 +93,7 @@ def admin_delete_user(
     return {"ok": True}
 
 app.include_router(admin_router)
+app.include_router(history_router)
 
 # ── Request / response schemas ─────────────────────────────────────────────────
 
@@ -167,6 +172,18 @@ async def ask(
         }
         for c in result.citations
     ]
+
+    # ── Save to history ────────────────────────────────────────────────────────
+    if result.answer_text:
+        save_conversation(
+            user_id  = user.user_id,
+            title    = req.question[:60].rstrip(),
+            question = req.question,
+            answer   = result.answer_text,
+            model    = req.model,
+            sources  = json.dumps(sources),
+        )
+
     return AskResponse(answer=result.answer_text, sources=sources)
 
 
@@ -190,6 +207,8 @@ async def ask_stream(
     async def generate():
         loop  = asyncio.get_event_loop()
         queue: asyncio.Queue[dict | None] = asyncio.Queue()
+        accumulated_text:    list[str]  = []
+        accumulated_sources: list[dict] = []
 
         def run_sync():
             try:
@@ -207,7 +226,22 @@ async def ask_stream(
         while True:
             event = await queue.get()
             if event is None:
+                # ── Save completed conversation to history ─────────────────
+                answer_text = "".join(accumulated_text)
+                if answer_text:
+                    save_conversation(
+                        user_id  = user.user_id,
+                        title    = req.question[:60].rstrip(),
+                        question = req.question,
+                        answer   = answer_text,
+                        model    = req.model,
+                        sources  = json.dumps(accumulated_sources),
+                    )
                 break
+            if event["type"] == "chunk":
+                accumulated_text.append(event.get("text", ""))
+            elif event["type"] == "sources":
+                accumulated_sources = event.get("sources", [])
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(

@@ -65,3 +65,23 @@ export interface AdminUser {
   is_active:       boolean;
   created_at:      string;
 }
+
+// ── Chat History ──────────────────────────────────────────────────────────────
+
+export interface ConversationSummary {
+  id:         number;
+  title:      string;
+  model:      string;
+  created_at: string;
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  question: string;
+  answer:   string;
+  sources:  Source[];
+}
+
+export interface HistoryListResponse {
+  items: ConversationSummary[];
+  total: number;
+}

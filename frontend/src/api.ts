@@ -1,6 +1,7 @@
 import type {
   AskRequest, AskResponse, StreamCallbacks,
   LoginResponse, AdminUser,
+  ConversationSummary, ConversationDetail, HistoryListResponse,
 } from "./types";
 
 const TOKEN_KEY = "auth_token";
@@ -135,4 +136,38 @@ export async function adminDeleteUser(userId: number): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to delete user (${res.status})`);
+}
+
+// ── History API ───────────────────────────────────────────────────────────────
+
+export async function getHistory(
+  limit = 20,
+  offset = 0,
+): Promise<HistoryListResponse> {
+  const res = await fetch(
+    `/api/history?limit=${limit}&offset=${offset}`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) throw new Error(`Failed to load history (${res.status})`);
+  return res.json();
+}
+
+export async function getRecentHistory(): Promise<{ items: ConversationSummary[] }> {
+  const res = await fetch("/api/history/recent", { headers: authHeaders() });
+  if (!res.ok) throw new Error(`Failed to load recent history (${res.status})`);
+  return res.json();
+}
+
+export async function getConversation(id: number): Promise<ConversationDetail> {
+  const res = await fetch(`/api/history/${id}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`Failed to load conversation (${res.status})`);
+  return res.json();
+}
+
+export async function deleteConversation(id: number): Promise<void> {
+  const res = await fetch(`/api/history/${id}`, {
+    method:  "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to delete conversation (${res.status})`);
 }
