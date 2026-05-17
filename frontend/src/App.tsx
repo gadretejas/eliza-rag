@@ -22,6 +22,7 @@ import AdminPage from "./pages/AdminPage";
 import HistoryPage from "./pages/HistoryPage";
 import FollowUpButton from "./components/FollowUpButton";
 import ChatSession from "./components/ChatSession";
+import NewChatButton from "./components/NewChatButton";
 
 type Page = "chat" | "about" | "settings" | "admin" | "history";
 
@@ -145,6 +146,21 @@ function AppInner() {
     setPanel({ sources: fileChunks, focusIndex: null });
   }
 
+  function handleNewChat() {
+    abortRef.current?.abort();
+    setPage("chat");
+    setQuestion("");
+    setStreamingText("");
+    setSources([]);
+    setValidCitations([]);
+    setStreaming(false);
+    setDone(false);
+    setError(null);
+    setPanel(null);
+    setSavedConvId(null);
+    setActiveSession(null);
+  }
+
   return (
     <div className="min-h-screen bg-white dark:bg-slate-950">
       {panel && (
@@ -180,7 +196,11 @@ function AppInner() {
           </button>
 
           <div className="flex-1 flex items-center justify-between min-w-0">
-            <div className="flex items-center gap-2">
+            <button
+              onClick={handleNewChat}
+              className="flex items-center gap-2 rounded-lg px-1 py-0.5
+                         hover:opacity-75 transition-opacity"
+            >
               <div className="w-6 h-6 rounded bg-gradient-to-br from-pink-500 to-purple-500
                               flex items-center justify-center">
                 <svg viewBox="0 0 16 16" fill="white" className="w-3.5 h-3.5">
@@ -190,9 +210,10 @@ function AppInner() {
               <span className="font-semibold text-gray-950 dark:text-slate-100 tracking-tight">
                 SEC EDGAR Research
               </span>
-            </div>
+            </button>
 
             <div className="flex items-center gap-2">
+              <NewChatButton onClick={handleNewChat} />
               <ThemeToggle theme={theme} onToggle={toggle} />
               {page === "chat" && (
                 <ModelPicker

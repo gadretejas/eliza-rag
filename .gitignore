@@ -62,3 +62,5 @@ frontend/.next/
 frontend/dist/
 frontend/build/
 index.faiss
+contextualization_test_output.db
+contextualization_test_output.json
