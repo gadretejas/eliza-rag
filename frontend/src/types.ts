@@ -38,3 +38,30 @@ export interface AskResponse {
   answer: string;
   sources: Source[];
 }
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+export type Role = "admin" | "analyst" | "viewer";
+
+export interface AuthUser {
+  id:              number;
+  email:           string;
+  role:            Role;
+  allowed_tickers: string;   // "*" or JSON array string
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type:   string;
+  role:         Role;
+  email:        string;
+}
+
+export interface AdminUser {
+  id:              number;
+  email:           string;
+  role:            Role;
+  allowed_tickers: string;
+  is_active:       boolean;
+  created_at:      string;
+}

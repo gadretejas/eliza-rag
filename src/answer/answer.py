@@ -41,6 +41,8 @@ class AnswerConfig:
     provider:  str | None = None      # "openai" | "anthropic" | "local"
     api_key:   str | None = None
     base_url:  str | None = None
+    # RBAC — restrict retrieval to these tickers (None = unrestricted)
+    allowed_tickers: list[str] | None = None
 
 
 # ── Data structures ────────────────────────────────────────────────────────────
@@ -409,7 +411,9 @@ class AnswerEngine:
             cfg = self.config
             retriever_cfg = RetrieverConfig(
                 top_k=cfg.top_k,
-                **{k: v for k, v in vars(cfg.retriever_config).items() if k != "top_k"},
+                allowed_tickers=cfg.allowed_tickers,
+                **{k: v for k, v in vars(cfg.retriever_config).items()
+                   if k not in ("top_k", "allowed_tickers")},
             )
             self._retriever = HybridRetriever(retriever_cfg)
         return self._retriever

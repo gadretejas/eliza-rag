@@ -2,6 +2,8 @@ import { useState, useRef } from "react";
 import { streamQuestion } from "./api";
 import type { Source, SavedModel } from "./types";
 import { useTheme } from "./useTheme";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute";
 import QueryBox from "./components/QueryBox";
 import AnswerPanel from "./components/AnswerPanel";
 import SourceList from "./components/SourceList";
@@ -10,8 +12,9 @@ import ThemeToggle from "./components/ThemeToggle";
 import Sidebar from "./components/Sidebar";
 import SettingsPage from "./components/SettingsPage";
 import AboutDataPage from "./components/AboutDataPage";
+import AdminPage from "./pages/AdminPage";
 
-type Page = "chat" | "about" | "settings";
+type Page = "chat" | "about" | "settings" | "admin";
 
 function loadSavedModels(): SavedModel[] {
   try {
@@ -26,8 +29,9 @@ function persistModels(models: SavedModel[]) {
   localStorage.setItem("savedModels", JSON.stringify(models));
 }
 
-export default function App() {
+function AppInner() {
   const { theme, toggle }             = useTheme();
+  const { user }                      = useAuth();
   const [page, setPage]               = useState<Page>("chat");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [savedModels, setSavedModels]       = useState<SavedModel[]>(loadSavedModels);
@@ -58,7 +62,6 @@ export default function App() {
   async function handleSubmit() {
     if (!question.trim() || streaming) return;
 
-    // Cancel any in-flight request
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -116,7 +119,6 @@ export default function App() {
       <header className="border-b border-gray-100 dark:border-slate-800
                          bg-white/90 dark:bg-slate-950/80 backdrop-blur sticky top-0 z-30 shadow-sm">
         <div className="flex items-center px-3 py-3 gap-3">
-          {/* Hamburger — pinned to viewport left */}
           <button
             onClick={() => setSidebarOpen(true)}
             title="Menu"
@@ -130,7 +132,6 @@ export default function App() {
             </svg>
           </button>
 
-          {/* Centred content */}
           <div className="flex-1 flex items-center justify-between min-w-0">
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded bg-gradient-to-br from-pink-500 to-purple-500
@@ -152,6 +153,7 @@ export default function App() {
                   savedModels={savedModels}
                   onChange={setModel}
                   disabled={streaming}
+                  role={user?.role}
                 />
               )}
             </div>
@@ -160,7 +162,9 @@ export default function App() {
       </header>
 
       {/* Page content */}
-      {page === "settings" ? (
+      {page === "admin" ? (
+        <AdminPage />
+      ) : page === "settings" ? (
         <SettingsPage
           models={savedModels}
           onAdd={handleAddModel}
@@ -169,7 +173,6 @@ export default function App() {
       ) : page === "about" ? (
         <AboutDataPage />
       ) : !streaming && !done && !error ? (
-        /* ── Centered empty state ── */
         <main className="max-w-3xl mx-auto px-4 w-full
                          min-h-[calc(100vh-57px)] flex flex-col items-center justify-center
                          gap-6 pb-20">
@@ -202,7 +205,6 @@ export default function App() {
           </div>
         </main>
       ) : (
-        /* ── Active state: query at top, answer streams below ── */
         <main className="max-w-3xl mx-auto px-4 py-8 flex flex-col gap-8">
           <QueryBox
             value={question}
@@ -220,7 +222,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Answer streams in; citations are pending until streaming ends */}
           {streamingText && (
             <>
               <div className="border-t border-gray-100 dark:border-slate-800" />
@@ -235,7 +236,6 @@ export default function App() {
             </>
           )}
 
-          {/* Sources arrive before the answer — shown below once retrieved */}
           {sources.length > 0 && (
             <>
               <div className="border-t border-gray-100 dark:border-slate-800" />
@@ -243,7 +243,6 @@ export default function App() {
             </>
           )}
 
-          {/* Retrieval in progress but no tokens yet */}
           {streaming && !streamingText && (
             <div className="flex flex-col gap-4 animate-pulse">
               <div className="h-3 bg-gray-100 dark:bg-slate-800 rounded w-16" />
@@ -259,5 +258,15 @@ export default function App() {
         </main>
       )}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <ProtectedRoute>
+        <AppInner />
+      </ProtectedRoute>
+    </AuthProvider>
   );
 }

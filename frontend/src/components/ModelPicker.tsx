@@ -1,18 +1,23 @@
-import type { SavedModel } from "../types";
+import type { SavedModel, Role } from "../types";
 
-const BUILTIN_MODELS = [
-  { value: "gpt-5.4-mini", label: "GPT-5.4 mini" },
-  { value: "gpt-5.4",      label: "GPT-5.4" },
+const ALL_BUILTIN_MODELS = [
+  { value: "gpt-5.4-mini", label: "GPT-5.4 mini", roles: ["admin", "analyst", "viewer"] },
+  { value: "gpt-5.4",      label: "GPT-5.4",      roles: ["admin", "analyst"] },
 ];
 
 interface Props {
-  value: string;
+  value:       string;
   savedModels: SavedModel[];
-  onChange: (modelId: string) => void;
-  disabled: boolean;
+  onChange:    (modelId: string) => void;
+  disabled:    boolean;
+  role?:       Role;
 }
 
-export default function ModelPicker({ value, savedModels, onChange, disabled }: Props) {
+export default function ModelPicker({ value, savedModels, onChange, disabled, role }: Props) {
+  const builtinModels = ALL_BUILTIN_MODELS.filter(
+    (m) => !role || m.roles.includes(role),
+  );
+
   return (
     <select
       value={value}
@@ -25,7 +30,7 @@ export default function ModelPicker({ value, savedModels, onChange, disabled }: 
                  border border-gray-200 dark:border-slate-700
                  text-gray-700 dark:text-slate-300"
     >
-      {BUILTIN_MODELS.map((m) => (
+      {builtinModels.map((m) => (
         <option key={m.value} value={m.value}>
           {m.label}
         </option>

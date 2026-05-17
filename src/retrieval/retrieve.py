@@ -61,6 +61,10 @@ class RetrieverConfig:
     top_k: int = 15
     min_per_company: int | None = None
 
+    # RBAC — restrict retrieval to a specific set of tickers.
+    # None means no restriction (all companies accessible).
+    allowed_tickers: list[str] | None = None
+
 
 # ── Query router ───────────────────────────────────────────────────────────────
 
@@ -714,8 +718,18 @@ class HybridRetriever:
 
         candidates: list[tuple[float, dict]] = []
 
-        if route.tickers:
-            for ticker in route.tickers:
+        # RBAC: intersect router tickers with the user's allowed_tickers.
+        # If no router tickers, restrict global search to allowed_tickers.
+        effective_tickers = route.tickers
+        if cfg.allowed_tickers is not None:
+            allowed_set = set(cfg.allowed_tickers)
+            if effective_tickers:
+                effective_tickers = [t for t in effective_tickers if t in allowed_set]
+            else:
+                effective_tickers = list(allowed_set)
+
+        if effective_tickers:
+            for ticker in effective_tickers:
                 filters = {**base_filters, "tickers": [ticker]}
                 hits = index.search(
                     qvec, filters,
@@ -763,8 +777,8 @@ class HybridRetriever:
 
         # ── per-company balancing ─────────────────────────────────────────────
         if route.tickers:
-            min_per = cfg.min_per_company or max(2, cfg.top_k // len(route.tickers))
-            ranked  = _balance(ranked, route.tickers, cfg.top_k, min_per)
+            min_per = cfg.min_per_company or max(2, cfg.top_k // len(effective_tickers))
+            ranked  = _balance(ranked, effective_tickers, cfg.top_k, min_per)
         else:
             ranked = ranked[: cfg.top_k]
 

@@ -11,15 +11,23 @@ from __future__ import annotations
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from src.answer.answer import AnswerEngine, AnswerConfig
+from src.answer.answer import AnswerConfig, AnswerEngine
+from api.auth import TokenClaims, get_current_user, router as auth_router
+from api.permissions import check_model_access, check_rate_limit, get_ticker_filter
+from api.users import init_db
 
-app = FastAPI(title="SEC EDGAR RAG API", version="1.0.0")
+# ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+init_db()   # creates users table and seeds default admin on first boot
+
+app = FastAPI(title="SEC EDGAR RAG API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,63 +36,137 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from typing import Literal
+app.include_router(auth_router)
+
+# ── Admin routes (user management) ────────────────────────────────────────────
+
+from fastapi import APIRouter
+from api.auth import require_admin
+from api.users import list_users, update_user, delete_user, User
+from pydantic import BaseModel as _BM
+
+admin_router = APIRouter(prefix="/admin", tags=["admin"])
+
+class UpdateUserRequest(_BM):
+    role:            str | None = None
+    allowed_tickers: str | None = None
+    is_active:       bool | None = None
+
+@admin_router.get("/users")
+def admin_list_users(_: TokenClaims = Depends(require_admin)) -> list[dict]:
+    return [
+        {
+            "id":              u.id,
+            "email":           u.email,
+            "role":            u.role,
+            "allowed_tickers": u.allowed_tickers,
+            "is_active":       u.is_active,
+            "created_at":      u.created_at,
+        }
+        for u in list_users()
+    ]
+
+@admin_router.patch("/users/{user_id}")
+def admin_update_user(
+    user_id: int,
+    req: UpdateUserRequest,
+    _: TokenClaims = Depends(require_admin),
+) -> dict:
+    update_user(
+        user_id,
+        role=req.role,
+        allowed_tickers=req.allowed_tickers,
+        is_active=req.is_active,
+    )
+    return {"ok": True}
+
+@admin_router.delete("/users/{user_id}")
+def admin_delete_user(
+    user_id: int,
+    _: TokenClaims = Depends(require_admin),
+) -> dict:
+    delete_user(user_id)
+    return {"ok": True}
+
+app.include_router(admin_router)
+
+# ── Request / response schemas ─────────────────────────────────────────────────
 
 class AskRequest(BaseModel):
     question: str
-    model: str = "gpt-5.4-mini"
-    top_k: int = 15
+    model:    str = "gpt-5.4-mini"
+    top_k:    int = 15
     provider: Literal["openai", "anthropic", "local"] | None = None
-    api_key: str | None = None
+    api_key:  str | None = None
     base_url: str | None = None
 
 
 class AskResponse(BaseModel):
-    answer: str
+    answer:  str
     sources: list[dict]
 
 
-# Singleton engine — ChromaDB is opened once at first request and reused.
-# Custom-keyed requests (user-supplied api_key) are never cached.
+# ── Engine cache ───────────────────────────────────────────────────────────────
+# Keyed by (provider, model, top_k, ticker_hash) so users with different corpus
+# restrictions never share a cached engine.
+
+import hashlib
+
 _engines: dict[str, AnswerEngine] = {}
 
 
-def _get_engine(req: AskRequest) -> AnswerEngine:
+def _ticker_hash(tickers: list[str] | None) -> str:
+    if tickers is None:
+        return "all"
+    return hashlib.md5(",".join(sorted(tickers)).encode()).hexdigest()[:8]
+
+
+def _get_engine(req: AskRequest, ticker_filter: list[str] | None) -> AnswerEngine:
     if req.api_key:
         # Never cache user-supplied keys
         return AnswerEngine(AnswerConfig(
             model=req.model, top_k=req.top_k,
             provider=req.provider, api_key=req.api_key, base_url=req.base_url,
+            allowed_tickers=ticker_filter,
         ))
-    key = f"{req.provider or 'openai'}:{req.model}:{req.top_k}"
+    key = f"{req.provider or 'openai'}:{req.model}:{req.top_k}:{_ticker_hash(ticker_filter)}"
     if key not in _engines:
         _engines[key] = AnswerEngine(AnswerConfig(
             model=req.model, top_k=req.top_k,
             provider=req.provider, base_url=req.base_url,
+            allowed_tickers=ticker_filter,
         ))
     return _engines[key]
 
 
+# ── Endpoints ──────────────────────────────────────────────────────────────────
+
 @app.post("/api/ask", response_model=AskResponse)
-async def ask(req: AskRequest) -> AskResponse:
+async def ask(
+    req: AskRequest,
+    user: TokenClaims = Depends(get_current_user),
+) -> AskResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    engine = _get_engine(req)
+    check_model_access(user, req.model)
+    check_rate_limit(user)
+
+    ticker_filter = get_ticker_filter(user)
+    engine = _get_engine(req, ticker_filter)
     result = engine.answer(req.question)
 
     sources = [
         {
-            "index": c.index,
-            "ticker": c.ticker,
+            "index":       c.index,
+            "ticker":      c.ticker,
             "filing_type": c.filing_type,
             "filing_date": c.filing_date,
-            "section": c.section_id,
-            "snippet": c.passage_text[:400],
+            "section":     c.section_id,
+            "snippet":     c.passage_text[:400],
         }
         for c in result.citations
     ]
-
     return AskResponse(answer=result.answer_text, sources=sources)
 
 
@@ -92,14 +174,21 @@ _stream_executor = ThreadPoolExecutor(max_workers=4)
 
 
 @app.post("/api/ask/stream")
-async def ask_stream(req: AskRequest) -> StreamingResponse:
+async def ask_stream(
+    req: AskRequest,
+    user: TokenClaims = Depends(get_current_user),
+) -> StreamingResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    engine = _get_engine(req)
+    check_model_access(user, req.model)
+    check_rate_limit(user)
+
+    ticker_filter = get_ticker_filter(user)
+    engine = _get_engine(req, ticker_filter)
 
     async def generate():
-        loop = asyncio.get_event_loop()
+        loop  = asyncio.get_event_loop()
         queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
         def run_sync():
@@ -124,10 +213,7 @@ async def ask_stream(req: AskRequest) -> StreamingResponse:
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
