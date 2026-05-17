@@ -1,12 +1,18 @@
 import { useState, useRef } from "react";
 import { streamQuestion, createSession } from "./api";
 import type { Source, SavedModel } from "./types";
+
+interface PanelState {
+  sources:    Source[];
+  focusIndex: number | null;
+}
 import { useTheme } from "./useTheme";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import QueryBox from "./components/QueryBox";
 import AnswerPanel from "./components/AnswerPanel";
-import SourceList from "./components/SourceList";
+import SourceFooter from "./components/SourceFooter";
+import CitationPanel from "./components/CitationPanel";
 import ModelPicker from "./components/ModelPicker";
 import ThemeToggle from "./components/ThemeToggle";
 import Sidebar from "./components/Sidebar";
@@ -47,7 +53,7 @@ function AppInner() {
   const [streaming, setStreaming]           = useState(false);
   const [done, setDone]                     = useState(false);
   const [error, setError]                   = useState<string | null>(null);
-  const [activeIndex, setActiveIndex]       = useState<number | null>(null);
+  const [panel, setPanel]                   = useState<PanelState | null>(null);
   const abortRef                            = useRef<AbortController | null>(null);
 
   // Follow-up session state
@@ -81,7 +87,7 @@ function AppInner() {
     setStreamingText("");
     setSources([]);
     setValidCitations([]);
-    setActiveIndex(null);
+    setPanel(null);
     setSavedConvId(null);
     setActiveSession(null);
 
@@ -128,11 +134,26 @@ function AppInner() {
   }
 
   function handleCitationClick(index: number) {
-    setActiveIndex((prev) => (prev === index ? null : index));
+    setPanel((prev) =>
+      prev?.focusIndex === index && prev.sources === sources
+        ? null
+        : { sources, focusIndex: index }
+    );
+  }
+
+  function handleFooterChipClick(rep: Source, fileChunks: Source[]) {
+    setPanel({ sources: fileChunks, focusIndex: null });
   }
 
   return (
     <div className="min-h-screen bg-white dark:bg-slate-950">
+      {panel && (
+        <CitationPanel
+          sources={panel.sources}
+          focusIndex={panel.focusIndex}
+          onClose={() => setPanel(null)}
+        />
+      )}
       <Sidebar
         open={sidebarOpen}
         currentPage={page}
@@ -267,22 +288,20 @@ function AppInner() {
                 text={streamingText}
                 model={model}
                 chunkCount={sources.length}
-                activeIndex={activeIndex}
                 onCitationClick={handleCitationClick}
                 pending={streaming}
               />
+              {sources.length > 0 && (
+                <SourceFooter
+                  sources={sources}
+                  onChipClick={handleFooterChipClick}
+                />
+              )}
               {done && !error && savedConvId && (
                 <div className="flex">
                   <FollowUpButton onClick={handleFollowUp} loading={followUpLoading} />
                 </div>
               )}
-            </>
-          )}
-
-          {sources.length > 0 && (
-            <>
-              <div className="border-t border-gray-100 dark:border-slate-800" />
-              <SourceList sources={sources} activeIndex={activeIndex} />
             </>
           )}
 

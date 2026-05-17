@@ -2,8 +2,14 @@ import { useState, useEffect, useRef } from "react";
 import { getSession, sendFollowUp } from "../api";
 import type { ChatSessionDetail, SessionMessage, Source } from "../types";
 import AnswerPanel from "./AnswerPanel";
-import SourceList from "./SourceList";
+import SourceFooter from "./SourceFooter";
+import CitationPanel from "./CitationPanel";
 import ContextBar from "./ContextBar";
+
+interface PanelState {
+  sources:    Source[];
+  focusIndex: number | null;
+}
 
 interface Props {
   sessionId:    number;
@@ -27,7 +33,7 @@ export default function ChatSession({ sessionId, contextLimit, model, onBack }: 
   const [streamTurn,   setStreamTurn]   = useState<StreamingTurn | null>(null);
 
   const [tokensUsed,   setTokensUsed]   = useState(0);
-  const [activeIndex,  setActiveIndex]  = useState<number | null>(null);
+  const [panel,        setPanel]        = useState<PanelState | null>(null);
 
   const bottomRef  = useRef<HTMLDivElement>(null);
   const abortRef   = useRef<AbortController | null>(null);
@@ -74,7 +80,7 @@ export default function ChatSession({ sessionId, contextLimit, model, onBack }: 
     setStreaming(true);
     setError(null);
     setStreamTurn({ text: "", sources: [] });
-    setActiveIndex(null);
+    setPanel(null);
 
     try {
       await sendFollowUp(sessionId, question, {
@@ -122,8 +128,27 @@ export default function ChatSession({ sessionId, contextLimit, model, onBack }: 
   // Pair messages into turns: user[i] + assistant[i+1]
   const messages = session?.messages ?? [];
 
+  function handleCitationClick(index: number, msgSources: Source[]) {
+    setPanel((prev) =>
+      prev?.focusIndex === index && prev.sources === msgSources
+        ? null
+        : { sources: msgSources, focusIndex: index }
+    );
+  }
+
+  function handleFooterChipClick(rep: Source, fileChunks: Source[]) {
+    setPanel({ sources: fileChunks, focusIndex: null });
+  }
+
   return (
     <div className="max-w-3xl mx-auto px-4 flex flex-col" style={{ minHeight: "calc(100vh - 57px)" }}>
+      {panel && (
+        <CitationPanel
+          sources={panel.sources}
+          focusIndex={panel.focusIndex}
+          onClose={() => setPanel(null)}
+        />
+      )}
 
       {/* Top bar: back link + context bar */}
       <div className="sticky top-[57px] z-10 bg-white/90 dark:bg-slate-950/80
@@ -153,11 +178,8 @@ export default function ChatSession({ sessionId, contextLimit, model, onBack }: 
             key={msg.id}
             msg={msg}
             model={model}
-            activeIndex={activeIndex}
-            onCitationClick={(idx) => setActiveIndex((p) => p === idx ? null : idx)}
-            isLatestAssistant={
-              msg.role === "assistant" && i === messages.length - 1 && !streamTurn
-            }
+            onCitationClick={(idx) => handleCitationClick(idx, msg.sources)}
+            onChipClick={(rep, chunks) => handleFooterChipClick(rep, chunks)}
           />
         ))}
 
@@ -173,9 +195,6 @@ export default function ChatSession({ sessionId, contextLimit, model, onBack }: 
             </div>
             {/* Streaming answer */}
             <div className="flex flex-col gap-6">
-              {streamTurn.sources.length > 0 && (
-                <SourceList sources={streamTurn.sources} activeIndex={activeIndex} />
-              )}
               {streamTurn.text && (
                 <>
                   <div className="border-t border-gray-100 dark:border-slate-800" />
@@ -183,10 +202,15 @@ export default function ChatSession({ sessionId, contextLimit, model, onBack }: 
                     text={streamTurn.text}
                     model={model}
                     chunkCount={streamTurn.sources.length}
-                    activeIndex={activeIndex}
-                    onCitationClick={(idx) => setActiveIndex((p) => p === idx ? null : idx)}
+                    onCitationClick={() => {}}
                     pending={true}
                   />
+                  {streamTurn.sources.length > 0 && (
+                    <SourceFooter
+                      sources={streamTurn.sources}
+                      onChipClick={handleFooterChipClick}
+                    />
+                  )}
                 </>
               )}
               {!streamTurn.text && (
@@ -262,13 +286,12 @@ export default function ChatSession({ sessionId, contextLimit, model, onBack }: 
 // ── Per-message bubble ─────────────────────────────────────────────────────────
 
 function MessageBubble({
-  msg, model, activeIndex, onCitationClick, isLatestAssistant,
+  msg, model, onCitationClick, onChipClick,
 }: {
-  msg: SessionMessage;
-  model: string;
-  activeIndex: number | null;
+  msg:             SessionMessage;
+  model:           string;
   onCitationClick: (i: number) => void;
-  isLatestAssistant: boolean;
+  onChipClick:     (rep: Source, chunks: Source[]) => void;
 }) {
   if (msg.role === "user") {
     return (
@@ -284,20 +307,16 @@ function MessageBubble({
   // Assistant
   return (
     <div className="flex flex-col gap-4">
-      {msg.sources.length > 0 && (
-        <SourceList sources={msg.sources} activeIndex={isLatestAssistant ? activeIndex : null} />
-      )}
-      {msg.sources.length > 0 && (
-        <div className="border-t border-gray-100 dark:border-slate-800" />
-      )}
       <AnswerPanel
         text={msg.content}
         model={model}
         chunkCount={msg.sources.length}
-        activeIndex={isLatestAssistant ? activeIndex : null}
-        onCitationClick={isLatestAssistant ? onCitationClick : () => {}}
+        onCitationClick={onCitationClick}
         pending={false}
       />
+      {msg.sources.length > 0 && (
+        <SourceFooter sources={msg.sources} onChipClick={onChipClick} />
+      )}
     </div>
   );
 }

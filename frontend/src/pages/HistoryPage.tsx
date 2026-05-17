@@ -220,7 +220,6 @@ export default function HistoryPage({ activeChatId, onClearActiveChatId }: Props
                         text={detail.answer}
                         model={detail.model}
                         chunkCount={detail.sources.length}
-                        activeIndex={activeIndex}
                         onCitationClick={(i) =>
                           setActiveIndex((prev) => (prev === i ? null : i))
                         }

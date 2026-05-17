@@ -261,3 +261,29 @@ export async function deleteSession(id: number): Promise<void> {
   });
   if (!res.ok) throw new Error(`Failed to delete session (${res.status})`);
 }
+
+// ── Document viewer API ───────────────────────────────────────────────────────
+
+export interface DocumentResponse {
+  ticker:       string;
+  filing_type:  string;
+  filing_date:  string;
+  section_id:   string;
+  section_name: string;
+  text:         string;
+}
+
+export async function getDocument(
+  ticker:      string,
+  filing_type: string,
+  filing_date: string,
+  section:     string,
+): Promise<DocumentResponse> {
+  const params = new URLSearchParams({ ticker, filing_type, filing_date, section });
+  const res = await fetch(`/api/document?${params}`, { headers: authHeaders() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? `Failed to load document (${res.status})`);
+  }
+  return res.json();
+}

@@ -1,16 +1,15 @@
 import CitationChip from "./CitationChip";
 
 interface Props {
-  text: string;
-  model: string;
-  chunkCount: number;
-  activeIndex: number | null;
+  text:            string;
+  model:           string;
+  chunkCount:      number;
   onCitationClick: (index: number) => void;
-  pending?: boolean;
+  pending?:        boolean;
 }
 
-export default function AnswerPanel({ text, model, chunkCount, activeIndex, onCitationClick, pending = false }: Props) {
-  const nodes = renderWithCitations(text, activeIndex, onCitationClick, pending);
+export default function AnswerPanel({ text, model, chunkCount, onCitationClick, pending = false }: Props) {
+  const nodes = renderWithCitations(text, onCitationClick, pending);
 
   return (
     <section>
@@ -29,7 +28,6 @@ export default function AnswerPanel({ text, model, chunkCount, activeIndex, onCi
 
 function renderWithCitations(
   text: string,
-  activeIndex: number | null,
   onCitationClick: (i: number) => void,
   pending: boolean,
 ) {
@@ -42,7 +40,6 @@ function renderWithCitations(
         <CitationChip
           key={i}
           index={idx}
-          active={!pending && activeIndex === idx}
           onClick={pending ? undefined : () => onCitationClick(idx)}
           pending={pending}
         />

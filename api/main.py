@@ -26,6 +26,7 @@ from api.history import (
     init_history_db, save_conversation, router as history_router,
 )
 from api.sessions import init_sessions_db, router as sessions_router
+from api.document import router as document_router
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -97,6 +98,7 @@ def admin_delete_user(
 app.include_router(admin_router)
 app.include_router(history_router)
 app.include_router(sessions_router)
+app.include_router(document_router)
 
 # ── Request / response schemas ─────────────────────────────────────────────────
 
