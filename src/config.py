@@ -35,7 +35,8 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 # ── Prompts ────────────────────────────────────────────────────────────────────
 PROMPTS_DIR        = ROOT / "prompts"
-SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.md"
+SYSTEM_PROMPT_PATH         = PROMPTS_DIR / "system_prompt.md"
+FOLLOWUP_SYSTEM_PROMPT_PATH = PROMPTS_DIR / "followup_system_prompt.md"
 
 # ── Logs ───────────────────────────────────────────────────────────────────────
 CONTEXTUALIZE_LOG = ROOT / "contextualize.log"

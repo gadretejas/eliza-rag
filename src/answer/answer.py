@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.retrieval.retrieve import HybridRetriever, RetrieverConfig, RetrievalTrace
-from src.config import SYSTEM_PROMPT_PATH, CORPUS_DIR, OLLAMA_BASE_URL, OPENAI_BASE_URL
+from src.config import SYSTEM_PROMPT_PATH, FOLLOWUP_SYSTEM_PROMPT_PATH, CORPUS_DIR, OLLAMA_BASE_URL, OPENAI_BASE_URL
 
 DEFAULT_MODEL    = "gpt-5.4-mini"
 OLLAMA_FALLBACK  = "llama3.2"
@@ -200,6 +200,43 @@ class LLMClient:
                 if delta:
                     yield delta
 
+    def stream_messages(
+        self,
+        system: str,
+        messages: list[dict],
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+    ) -> Iterator[str]:
+        """
+        Yield raw token strings for a multi-turn conversation.
+
+        *messages* is a list of {"role": "user"|"assistant", "content": "..."} dicts
+        in chronological order.  *system* is passed as a separate system prompt.
+        """
+        if self._provider == "anthropic":
+            with self._anthropic.messages.stream(  # type: ignore[union-attr]
+                model=self.model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system,
+                messages=messages,
+            ) as s:
+                for text in s.text_stream:
+                    yield text
+        else:
+            openai_messages = [{"role": "system", "content": system}] + messages
+            response = self._openai.chat.completions.create(  # type: ignore[union-attr]
+                model=self.model,
+                temperature=temperature,
+                max_completion_tokens=max_tokens,
+                stream=True,
+                messages=openai_messages,
+            )
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+
 
 # ── Prompt helpers ─────────────────────────────────────────────────────────────
 
@@ -209,11 +246,10 @@ def load_system_prompt(path: Path = SYSTEM_PROMPT_PATH) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def build_prompt(question: str, chunks: list[dict], max_chunk_chars: int) -> str:
-    """Format retrieved chunks as a numbered context block followed by the question."""
+def build_chunk_context(chunks: list[dict], max_chunk_chars: int) -> str:
+    """Format retrieved chunks as a numbered context block (no question appended)."""
     lines = ["---"]
     for i, chunk in enumerate(chunks, start=1):
-        # Shorten filing_type: "10-K (Annual Report)" → "10-K"
         filing_type = chunk["filing_type"].split()[0]
         header = (
             f"[{i}] {chunk['ticker']} · {filing_type} · "
@@ -226,11 +262,13 @@ def build_prompt(question: str, chunks: list[dict], max_chunk_chars: int) -> str
         lines.append(header)
         lines.append(text)
         lines.append("")
-
     lines.append("---")
-    lines.append("")
-    lines.append(f"Question: {question}")
     return "\n".join(lines)
+
+
+def build_prompt(question: str, chunks: list[dict], max_chunk_chars: int) -> str:
+    """Format retrieved chunks as a numbered context block followed by the question."""
+    return build_chunk_context(chunks, max_chunk_chars) + f"\n\nQuestion: {question}"
 
 
 # ── Citation parser ────────────────────────────────────────────────────────────
@@ -287,9 +325,10 @@ class AnswerEngine:
 
     def __init__(self, config: AnswerConfig | None = None) -> None:
         self.config         = config or AnswerConfig()
-        self._retriever:    HybridRetriever | None = None
-        self._llm:          LLMClient | None       = None
-        self._system_prompt: str | None            = None
+        self._retriever:             HybridRetriever | None = None
+        self._llm:                   LLMClient | None       = None
+        self._system_prompt:         str | None             = None
+        self._followup_system_prompt: str | None            = None
 
     def answer(self, question: str) -> Answer:
         """Return a grounded Answer without retrieval trace."""
@@ -363,6 +402,96 @@ class AnswerEngine:
         yield {"type": "citations", "valid": valid_indices}
         yield {"type": "done"}
 
+    def followup_stream(
+        self,
+        history: list[dict],   # [{"role": "user"|"assistant", "content": "..."}]
+        question: str,
+        tokens_so_far: int = 0,
+        context_limit: int = 128_000,
+    ) -> Iterator[dict]:
+        """
+        Multi-turn follow-up stream.
+
+        Retrieves fresh chunks for *question*, then calls the LLM with the
+        full *history* + new question.
+
+        Yields the same SSE events as answer_stream, plus:
+          {"type": "token_count", "tokens_used": N, "context_limit": M}
+        emitted once before the first chunk and once after done.
+        """
+        cfg = self.config
+        try:
+            retrieval_trace = self._get_retriever().retrieve_with_trace(question)
+            chunks = retrieval_trace.final_chunks
+        except Exception as e:
+            yield {"type": "error", "detail": f"Retrieval failed: {e}"}
+            return
+
+        sources_payload = [
+            {
+                "index":       i + 1,
+                "ticker":      c["ticker"],
+                "filing_type": c["filing_type"].split()[0],
+                "filing_date": c["filing_date"],
+                "section":     c["section_id"],
+                "snippet":     c["text"][:400],
+            }
+            for i, c in enumerate(chunks)
+        ]
+        yield {"type": "sources", "sources": sources_payload}
+
+        if not chunks:
+            yield {"type": "chunk", "text": (
+                "The available filings do not contain enough information "
+                "to answer this question."
+            )}
+            yield {"type": "citations", "valid": []}
+            yield {"type": "done"}
+            return
+
+        # Build the chunk context block (without "Question:" at the end —
+        # the question is the last user message in *history + new_turn*).
+        chunk_context = build_chunk_context(chunks, cfg.max_chunk_chars)
+
+        # Conversational system prompt augmented with the chunk context for this turn.
+        system_with_context = self._get_followup_system_prompt() + "\n\n" + chunk_context
+
+        # Append new user question to history.
+        messages = list(history) + [{"role": "user", "content": question}]
+
+        # Estimate token usage before streaming.
+        from api.token_count import count_messages_tokens
+        tokens_used = tokens_so_far + count_messages_tokens(
+            messages, cfg.model, system=system_with_context
+        )
+        yield {"type": "token_count", "tokens_used": tokens_used, "context_limit": context_limit}
+
+        llm         = self._get_llm()
+        accumulated = ""
+
+        try:
+            for token in llm.stream_messages(
+                system_with_context,
+                messages,
+                temperature=cfg.temperature,
+                max_tokens=cfg.max_tokens,
+            ):
+                accumulated += token
+                yield {"type": "chunk", "text": token}
+        except Exception as e:
+            yield {"type": "error", "detail": f"LLM stream failed: {e}"}
+            return
+
+        _, citations = parse_citations(accumulated, chunks)
+        valid_indices = [c.index for c in citations]
+        yield {"type": "citations", "valid": valid_indices}
+
+        # Final token count after the assistant reply.
+        from api.token_count import count_tokens
+        tokens_used += count_tokens(accumulated, cfg.model)
+        yield {"type": "token_count", "tokens_used": tokens_used, "context_limit": context_limit}
+        yield {"type": "done"}
+
     # ── internals ─────────────────────────────────────────────────────────────
 
     def _run(self, question: str, trace: bool) -> Answer:
@@ -427,6 +556,11 @@ class AnswerEngine:
         if self._system_prompt is None:
             self._system_prompt = load_system_prompt()
         return self._system_prompt
+
+    def _get_followup_system_prompt(self) -> str:
+        if self._followup_system_prompt is None:
+            self._followup_system_prompt = load_system_prompt(FOLLOWUP_SYSTEM_PROMPT_PATH)
+        return self._followup_system_prompt
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

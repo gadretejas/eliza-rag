@@ -2,6 +2,7 @@ import type {
   AskRequest, AskResponse, StreamCallbacks,
   LoginResponse, AdminUser,
   ConversationSummary, ConversationDetail, HistoryListResponse,
+  ChatSessionDetail,
 } from "./types";
 
 const TOKEN_KEY = "auth_token";
@@ -79,11 +80,12 @@ export async function streamQuestion(
       try {
         const event = JSON.parse(line.slice(6));
         switch (event.type) {
-          case "sources":   callbacks.onSources(event.sources);   break;
-          case "chunk":     callbacks.onChunk(event.text);        break;
-          case "citations": callbacks.onCitations(event.valid);   break;
-          case "done":      callbacks.onDone();                   return;
-          case "error":     callbacks.onError(event.detail);      return;
+          case "sources":   callbacks.onSources(event.sources);           break;
+          case "chunk":     callbacks.onChunk(event.text);                break;
+          case "citations": callbacks.onCitations(event.valid);           break;
+          case "saved":     callbacks.onSaved?.(event.conv_id);           break;
+          case "done":      callbacks.onDone();                           return;
+          case "error":     callbacks.onError(event.detail);              return;
         }
       } catch {
         // malformed line — skip
@@ -170,4 +172,92 @@ export async function deleteConversation(id: number): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to delete conversation (${res.status})`);
+}
+
+// ── Sessions API ──────────────────────────────────────────────────────────────
+
+export async function createSession(
+  convId: number,
+  model: string,
+): Promise<{ session_id: number; context_limit: number }> {
+  const res = await fetch("/api/sessions", {
+    method:  "POST",
+    headers: authHeaders(),
+    body:    JSON.stringify({ conv_id: convId, model }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? `Failed to create session (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function getSession(id: number): Promise<ChatSessionDetail> {
+  const res = await fetch(`/api/sessions/${id}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`Failed to load session (${res.status})`);
+  return res.json();
+}
+
+export interface FollowUpCallbacks {
+  onSources:    (sources: Source[]) => void;
+  onChunk:      (text: string) => void;
+  onCitations:  (valid: number[]) => void;
+  onTokenCount: (tokensUsed: number, contextLimit: number) => void;
+  onDone:       () => void;
+  onError:      (detail: string) => void;
+}
+
+import type { Source } from "./types";
+
+export async function sendFollowUp(
+  sessionId: number,
+  question:  string,
+  callbacks: FollowUpCallbacks,
+  signal?:   AbortSignal,
+): Promise<void> {
+  const res = await fetch(`/api/sessions/${sessionId}/message`, {
+    method:  "POST",
+    headers: authHeaders(),
+    body:    JSON.stringify({ question }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? `API error ${res.status}`);
+  }
+
+  const reader  = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let   buffer  = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const event = JSON.parse(line.slice(6));
+        switch (event.type) {
+          case "sources":     callbacks.onSources(event.sources);                             break;
+          case "chunk":       callbacks.onChunk(event.text);                                  break;
+          case "citations":   callbacks.onCitations(event.valid);                             break;
+          case "token_count": callbacks.onTokenCount(event.tokens_used, event.context_limit); break;
+          case "done":        callbacks.onDone();                                              return;
+          case "error":       callbacks.onError(event.detail);                                return;
+        }
+      } catch { /* malformed line */ }
+    }
+  }
+}
+
+export async function deleteSession(id: number): Promise<void> {
+  const res = await fetch(`/api/sessions/${id}`, {
+    method:  "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to delete session (${res.status})`);
 }

@@ -30,6 +30,7 @@ export interface StreamCallbacks {
   onSources:   (sources: Source[]) => void;
   onChunk:     (text: string) => void;
   onCitations: (valid: number[]) => void;
+  onSaved?:    (convId: number) => void;
   onDone:      () => void;
   onError:     (detail: string) => void;
 }
@@ -64,6 +65,27 @@ export interface AdminUser {
   allowed_tickers: string;
   is_active:       boolean;
   created_at:      string;
+}
+
+// ── Follow-up Sessions ────────────────────────────────────────────────────────
+
+export interface SessionMessage {
+  id:         number;
+  role:       "user" | "assistant";
+  content:    string;
+  sources:    Source[];
+  tokens:     number;
+  created_at: string;
+}
+
+export interface ChatSessionDetail {
+  id:            number;
+  title:         string;
+  model:         string;
+  created_at:    string;
+  messages:      SessionMessage[];
+  tokens_used:   number;
+  context_limit: number;
 }
 
 // ── Chat History ──────────────────────────────────────────────────────────────

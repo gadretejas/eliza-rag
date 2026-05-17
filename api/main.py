@@ -25,11 +25,13 @@ from api.users import init_db
 from api.history import (
     init_history_db, save_conversation, router as history_router,
 )
+from api.sessions import init_sessions_db, router as sessions_router
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 init_db()           # creates users table and seeds default admin on first boot
 init_history_db()   # creates conversations table
+init_sessions_db()  # creates sessions + session_messages tables
 
 app = FastAPI(title="SEC EDGAR RAG API", version="2.0.0")
 
@@ -94,6 +96,7 @@ def admin_delete_user(
 
 app.include_router(admin_router)
 app.include_router(history_router)
+app.include_router(sessions_router)
 
 # ── Request / response schemas ─────────────────────────────────────────────────
 
@@ -226,10 +229,16 @@ async def ask_stream(
         while True:
             event = await queue.get()
             if event is None:
-                # ── Save completed conversation to history ─────────────────
+                break
+            if event["type"] == "chunk":
+                accumulated_text.append(event.get("text", ""))
+            elif event["type"] == "sources":
+                accumulated_sources = event.get("sources", [])
+            elif event["type"] == "done":
+                # ── Save before emitting done so frontend receives saved first ──
                 answer_text = "".join(accumulated_text)
                 if answer_text:
-                    save_conversation(
+                    conv_id = save_conversation(
                         user_id  = user.user_id,
                         title    = req.question[:60].rstrip(),
                         question = req.question,
@@ -237,11 +246,7 @@ async def ask_stream(
                         model    = req.model,
                         sources  = json.dumps(accumulated_sources),
                     )
-                break
-            if event["type"] == "chunk":
-                accumulated_text.append(event.get("text", ""))
-            elif event["type"] == "sources":
-                accumulated_sources = event.get("sources", [])
+                    yield f"data: {json.dumps({'type': 'saved', 'conv_id': conv_id})}\n\n"
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(

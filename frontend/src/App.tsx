@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { streamQuestion } from "./api";
+import { streamQuestion, createSession } from "./api";
 import type { Source, SavedModel } from "./types";
 import { useTheme } from "./useTheme";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
@@ -14,6 +14,8 @@ import SettingsPage from "./components/SettingsPage";
 import AboutDataPage from "./components/AboutDataPage";
 import AdminPage from "./pages/AdminPage";
 import HistoryPage from "./pages/HistoryPage";
+import FollowUpButton from "./components/FollowUpButton";
+import ChatSession from "./components/ChatSession";
 
 type Page = "chat" | "about" | "settings" | "admin" | "history";
 
@@ -48,6 +50,11 @@ function AppInner() {
   const [activeIndex, setActiveIndex]       = useState<number | null>(null);
   const abortRef                            = useRef<AbortController | null>(null);
 
+  // Follow-up session state
+  const [activeSession, setActiveSession]   = useState<{ id: number; contextLimit: number } | null>(null);
+  const [followUpLoading, setFollowUpLoading] = useState(false);
+  const [savedConvId, setSavedConvId]       = useState<number | null>(null);
+
   function handleAddModel(m: SavedModel) {
     const updated = [...savedModels, m];
     setSavedModels(updated);
@@ -75,6 +82,8 @@ function AppInner() {
     setSources([]);
     setValidCitations([]);
     setActiveIndex(null);
+    setSavedConvId(null);
+    setActiveSession(null);
 
     const custom = savedModels.find((m) => m.id === model);
     const req = custom
@@ -93,6 +102,7 @@ function AppInner() {
         onSources:   (s) => setSources(s),
         onChunk:     (t) => setStreamingText((prev) => prev + t),
         onCitations: (v) => setValidCitations(v),
+        onSaved:     (id) => setSavedConvId(id),
         onDone:      ()  => { setStreaming(false); setDone(true); },
         onError:     (d) => { setStreaming(false); setError(d); },
       }, controller.signal);
@@ -101,6 +111,19 @@ function AppInner() {
         setError(e instanceof Error ? e.message : "Something went wrong");
       }
       setStreaming(false);
+    }
+  }
+
+  async function handleFollowUp() {
+    if (!savedConvId) return;
+    setFollowUpLoading(true);
+    try {
+      const { session_id, context_limit } = await createSession(savedConvId, model);
+      setActiveSession({ id: session_id, contextLimit: context_limit });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start follow-up");
+    } finally {
+      setFollowUpLoading(false);
     }
   }
 
@@ -165,7 +188,14 @@ function AppInner() {
       </header>
 
       {/* Page content */}
-      {page === "history" ? (
+      {activeSession ? (
+        <ChatSession
+          sessionId={activeSession.id}
+          contextLimit={activeSession.contextLimit}
+          model={model}
+          onBack={() => setActiveSession(null)}
+        />
+      ) : page === "history" ? (
         <HistoryPage
           activeChatId={activeChatId}
           onClearActiveChatId={() => setActiveChatId(null)}
@@ -241,6 +271,11 @@ function AppInner() {
                 onCitationClick={handleCitationClick}
                 pending={streaming}
               />
+              {done && !error && savedConvId && (
+                <div className="flex">
+                  <FollowUpButton onClick={handleFollowUp} loading={followUpLoading} />
+                </div>
+              )}
             </>
           )}
 
