@@ -165,8 +165,11 @@ _SECTION_SIGNALS: list[tuple[list[str], list[str]]] = [
          "vulnerability", "uncertainty", "hazard", "concern"],
     ),
     (
-        # Item 7/8 = MD&A/financials in 10-K; Item 2/1 = same in 10-Q
-        ["Item 7", "Item 8", "Item 2"],
+        # Item 7/8 = MD&A/financial statements in 10-K
+        # Item 2/1 = MD&A/financial statements in 10-Q
+        # Item 1 (10-Q) contains the actual revenue tables and is included
+        # so exact dollar figures are retrieved alongside narrative discussion
+        ["Item 7", "Item 8", "Item 2", "Item 1"],
         ["revenue", "sales", "growth", "outlook", "guidance", "forecast",
          "performance", "results", "earnings", "profit", "income", "margin",
          "eps", "ebitda", "cash flow", "operating income", "net income",
