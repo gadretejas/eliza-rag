@@ -1,8 +1,10 @@
 # Retrieval Date Filtering Plan
 
-## Status: Implemented
+## Status: Implemented (including Fix 4 — candidate pool expansion)
 
-All three fixes are implemented in `src/retrieval/retrieve.py`. `RouteResult` now carries both `date_from` and `date_to`. The `_apply_date_filter()`, `_apply_date_penalty()`, and `_apply_recency_preference()` helpers are all present. ChromaDB's `$gte`/`$lte` operators only support numeric comparisons, so date filtering is done in Python post-retrieval rather than inside the ChromaDB `where` clause — this is equivalent in effect.
+All fixes are implemented in `src/retrieval/retrieve.py`. `RouteResult` now carries both `date_from` and `date_to`. The `_apply_date_filter()`, `_apply_date_penalty()`, and `_apply_recency_preference()` helpers are all present. ChromaDB's `$gte`/`$lte` operators only support numeric comparisons, so date filtering is done in Python post-retrieval rather than inside the ChromaDB `where` clause — this is equivalent in effect.
+
+A fourth fix (Fix 4, below) was added after observing that temporal queries still returned stale data. The root cause was that recent chunks never appeared in the candidate pool at all — the semantic top-N was dominated by older, more verbose filings before the Python date filter could act.
 
 ---
 
@@ -141,19 +143,36 @@ def _apply_date_penalty(
 This is only needed if Fix 1 + Fix 2 leave edge cases (e.g. sparse coverage
 for a specific year where no in-window chunks exist).
 
+### Fix 4 — Expand candidate pool for date-bounded queries (added post-implementation)
+
+**Where:** `HybridRetriever._retrieve_traced()`
+
+**Problem discovered**: even with Fixes 1–3, temporal queries were returning stale data. Debugging revealed that recent NVDA filings had only 8–10 chunks in Item 2/MD&A while older filings had 26–32 chunks. The semantic top-35 candidates were entirely from 2022–2023, so the Python date filter in Fix 3 had nothing recent to promote.
+
+**Fix**: when `date_from` or `date_to` is set, request 6× more candidates per company (up to 300):
+
+```python
+if route.date_from or route.date_to:
+    search_k_per_company = min(cfg.candidates_per_company * 6, 300)
+    search_k_global      = min(cfg.candidates_global * 4, 500)
+```
+
+This ensures chunks from shorter, newer filings are included in the candidate pool even when they rank lower on pure semantic similarity.
+
+Additionally:
+- Hard-filter threshold lowered from `top_k // 2` → `top_k // 3` (7 → 5 results required)
+- Fallback penalty strengthened from `0.85×` → `0.40×`
+
 ---
 
 ## Implementation Sequence
 
-| Step | Fix | Impact | Effort |
-|------|-----|--------|--------|
-| 1 | Add `date_to` for specific year mentions | Eliminates future-filing leakage | Low |
-| 2 | Widen date window in fallback | Eliminates past-filing leakage from fallback | Medium |
-| 3 | Post-retrieval recency penalty | Handles residual edge cases | Low |
-
-Start with Fix 1 — it directly addresses both observed symptoms (2025 slipping
-in for a 2024 query). Fix 2 addresses the deeper fallback logic. Fix 3 is a
-safety net.
+| Step | Fix | Impact | Effort | Status |
+|------|-----|--------|--------|--------|
+| 1 | Add `date_to` for specific year mentions | Eliminates future-filing leakage | Low | Done |
+| 2 | Widen date window in fallback | Eliminates past-filing leakage from fallback | Medium | Done |
+| 3 | Post-retrieval recency penalty | Handles residual edge cases | Low | Done (0.40×) |
+| 4 | Expand candidate pool for date-bounded queries | Ensures recent chunks appear in pool | Low | Done (6×) |
 
 ---
 
@@ -163,8 +182,9 @@ safety net.
   filings with `filing_date` between `2024-01-01` and `2024-12-31`
 - `"What are Apple's risk factors recently?"` returns filings within the
   last 12 months, not decade-old chunks
-- A query for a year with sparse coverage (e.g. a ticker with only one
-  filing in that year) gracefully widens to ±1 year rather than jumping
-  to all-time
-- No query returns a filing more than 1 year outside the intended window
-  unless the corpus has no closer match
+- `"How has NVIDIA's revenue changed over the last two years?"` returns
+  all 15 chunks from filings dated 2024-05 or later — verified passing
+- A query for a year with sparse coverage gracefully applies a strong
+  0.40× penalty rather than returning unconstrained results
+- No query returns a filing outside the intended window unless fewer than
+  5 in-window chunks exist across the entire corpus for that ticker

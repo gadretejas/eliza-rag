@@ -199,16 +199,21 @@ Question
     │
     ▼  (~1ms)
 Query Router
-    │  RouteResult{tickers, sections, date_from}
+    │  RouteResult{tickers, sections, date_from, date_to}
     │
-    ▼  (~50–100ms)
+    ▼  (~5–10ms)
 Per-ticker ANN search
-    │  top 20 candidates per ticker
-    │  (metadata pre-filter applied)
+    │  top 35 candidates per ticker (undated query)
+    │  top 210 candidates per ticker (date-bounded query)
+    │
+    ▼  (<1ms)
+Python date filter / penalty
+    │  hard filter if ≥5 in-window results
+    │  0.40× penalty otherwise (preserves fallback for sparse windows)
     │
     ▼
 Pool all candidates
-    │  N = 20 × len(tickers), or 50 if no tickers
+    │  N ≤ 210 × len(tickers), or ≤320 if no tickers
     │
     ▼  (~150–300ms)
 Re-ranker
@@ -222,7 +227,7 @@ Balanced top-k selection
 list[Chunk]  →  answer call
 ```
 
-**Total latency estimate**: 200–400ms for a 3-company question with local re-ranker.
+**Total latency estimate**: 200–400ms for a 3-company question with local re-ranker. Date-bounded queries add ~3ms for the larger candidate pool.
 
 ### Worked example (standard)
 
@@ -233,16 +238,19 @@ Question: *"What are the primary risk factors facing Apple, Tesla, and JPMorgan,
 tickers:   [AAPL, TSLA, JPM]
 sections:  [Item 1A]
 date_from: None
+date_to:   None
 ```
 
-**ANN search**
-- 20 × AAPL `Item 1A` candidates
-- 20 × TSLA `Item 1A` candidates
-- 20 × JPM `Item 1A` candidates
-- Pool: 60 chunks
+**ANN search** — no date window, so standard candidate count applies:
+- 35 × AAPL `Item 1A` candidates
+- 35 × TSLA `Item 1A` candidates
+- 35 × JPM `Item 1A` candidates
+- Pool: 105 chunks (before date filter, which is a no-op here)
 
 **Re-ranker**
 Scores all 60 against "primary risk factors facing Apple, Tesla, JPMorgan comparison". The top scores are likely the most specific and substantive risk descriptions from the most recent 10-K for each company.
+
+**Recency preference** — no date window, so `_apply_recency_preference` applies a gentle `0.95^years_old` decay to nudge results toward the most recent filings.
 
 **Balanced selection**
 `min_per_company = max(2, 15 // 3) = 5`
@@ -460,7 +468,8 @@ class RetrieverConfig:
 
     # Standard pipeline parameters
     top_k: int = 15                   # final chunks passed to LLM
-    candidates_per_company: int = 20  # ANN candidates per ticker
+    candidates_per_company: int = 35  # ANN candidates per ticker (6× when date-bounded)
+    candidates_global: int = 80       # ANN candidates when no ticker (4× when date-bounded)
     rerank: bool = True
     reranker: Literal["local", "cohere", "voyage"] = "local"
 
@@ -537,3 +546,9 @@ Empirically, the demo question set is answerable in 1–2 iterations. The cap of
 
 **Why does `AgenticRetriever` wrap `HybridRetriever`'s primitives rather than implementing its own retrieval?**
 Code reuse and correctness consistency. The vector search, re-ranking, and balancing logic has been tested and debugged in one place. The agent is an orchestration layer — it decides *what* to retrieve, not *how* to retrieve it.
+
+**Why expand the candidate pool (6×) for date-bounded queries instead of just applying a strong penalty?**
+The penalty approach alone is insufficient when recent chunks are absent from the initial top-N candidates. Older NVDA quarterly filings had 26–32 chunks in Item 2/MD&A; newer filings have only 8–10. A pure semantic top-35 can be entirely 2022–2023 chunks — recent ones rank 36th or below and are discarded before the Python date filter runs. Expanding to 210 candidates ensures recent filings appear in the pool regardless of their semantic rank. The 0.40× penalty is then a safety net for the rare case where expansion still produces fewer than 5 in-window results.
+
+**Why lower the hard-filter threshold from `top_k // 2` to `top_k // 3`?**
+With 7 NVDA filings after a `date_from` of 2024-05, the previous threshold of 7 (`top_k // 2`) required all 7 to produce at least one in-window chunk before applying the hard filter. That was frequently not met, triggering the lenient fallback. Lowering to 5 (`top_k // 3`) means 5 in-window results are sufficient for the hard filter, which is the common case for a 1–2 year window over any single ticker.
