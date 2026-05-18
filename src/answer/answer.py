@@ -18,6 +18,7 @@ import re
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import date as _date
 from pathlib import Path
 
 from src.retrieval.retrieve import HybridRetriever, RetrieverConfig, RetrievalTrace
@@ -555,12 +556,12 @@ class AnswerEngine:
     def _get_system_prompt(self) -> str:
         if self._system_prompt is None:
             self._system_prompt = load_system_prompt()
-        return self._system_prompt
+        return f"Today's date: {_date.today().isoformat()}\n\n{self._system_prompt}"
 
     def _get_followup_system_prompt(self) -> str:
         if self._followup_system_prompt is None:
             self._followup_system_prompt = load_system_prompt(FOLLOWUP_SYSTEM_PROMPT_PATH)
-        return self._followup_system_prompt
+        return f"Today's date: {_date.today().isoformat()}\n\n{self._followup_system_prompt}"
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

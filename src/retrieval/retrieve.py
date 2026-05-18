@@ -47,8 +47,8 @@ class RetrieverConfig:
     chroma_collection: str = COLLECTION_NAME
 
     # Vector search
-    candidates_per_company: int = 20
-    candidates_global: int = 60
+    candidates_per_company: int = 35
+    candidates_global: int = 80
     oversample_factor:  int = 8
 
     # Re-ranking
@@ -508,9 +508,14 @@ def _apply_date_penalty(
     candidates: list[tuple[float, dict]],
     date_from:  str | None,
     date_to:    str | None,
-    penalty:    float = 0.85,
+    penalty:    float = 0.40,
 ) -> list[tuple[float, dict]]:
-    """Discount chunks outside the intended date window without hard-excluding them."""
+    """Discount chunks outside the intended date window without hard-excluding them.
+
+    A penalty of 0.40 means an out-of-window chunk needs a raw score >2.5×
+    higher than an in-window chunk to still win — effectively ruling it out
+    in practice while keeping the fallback for truly sparse windows.
+    """
     if not date_from and not date_to:
         return candidates
 
@@ -728,19 +733,30 @@ class HybridRetriever:
             else:
                 effective_tickers = list(allowed_set)
 
+        # When a date window is active, the semantically top-N chunks may all
+        # come from older filings (they can be more verbose / better matches).
+        # Request many more candidates so that the Python date-filter stage has
+        # a large enough pool and can find recent chunks that rank lower on
+        # pure semantic similarity.
+        search_k_per_company = cfg.candidates_per_company
+        search_k_global      = cfg.candidates_global
+        if route.date_from or route.date_to:
+            search_k_per_company = min(search_k_per_company * 6, 300)
+            search_k_global      = min(search_k_global * 4, 500)
+
         if effective_tickers:
             for ticker in effective_tickers:
                 filters = {**base_filters, "tickers": [ticker]}
                 hits = index.search(
                     qvec, filters,
-                    top_k=cfg.candidates_per_company,
+                    top_k=search_k_per_company,
                     oversample_factor=cfg.oversample_factor,
                 )
                 candidates.extend(hits)
         else:
             candidates = index.search(
                 qvec, base_filters,
-                top_k=cfg.candidates_global,
+                top_k=search_k_global,
                 oversample_factor=cfg.oversample_factor,
             )
 
@@ -759,11 +775,15 @@ class HybridRetriever:
 
         # ── date filtering (Python post-filter — ChromaDB $gte/$lte are numeric-only)
         filtered = _apply_date_filter(candidates, route.date_from, route.date_to)
-        if len(filtered) >= max(1, cfg.top_k // 2):
+        # Use hard filter if we have at least top_k//3 results in the window (≥5).
+        # If fewer, apply a strong penalty (0.40×) so out-of-window chunks are
+        # heavily discounted even when they score higher on pure semantic similarity.
+        if len(filtered) >= max(1, cfg.top_k // 3):
             candidates = filtered
         else:
-            # Too few results in window — apply soft penalty instead of hard cut
-            candidates = _apply_date_penalty(candidates, route.date_from, route.date_to)
+            # Too few results in window — apply strong penalty instead of hard cut
+            candidates = _apply_date_penalty(candidates, route.date_from, route.date_to,
+                                             penalty=0.40)
 
         # ── recency preference (only when no explicit date in question) ───────
         if route.date_from is None and route.date_to is None:

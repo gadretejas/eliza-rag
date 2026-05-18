@@ -4,8 +4,8 @@ Each passage is labelled [1], [2], ... and includes the company ticker,
 filing type, filing date, and section.
 
 Data context:
-- The corpus covers 23 US public companies (e.g. AAPL, NVDA, MSFT, TSLA)
-  across 10-K (annual) and 10-Q (quarterly) filings from 2021 to 2025.
+- The corpus covers 54 US public companies (e.g. AAPL, NVDA, MSFT, TSLA)
+  across 10-K (annual) and 10-Q (quarterly) filings from 2021 to 2026.
 - Section IDs map to standard filing structure:
   10-K: Item 1 = Business overview; Item 1A = Risk factors;
   Item 7 = MD&A (revenue tables, segment breakdowns, guidance);
